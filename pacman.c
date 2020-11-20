@@ -41,13 +41,23 @@ static struct {
 
     // the gfx subsystem implements a simple tile+sprite renderer
     struct {
+        // the 36x28 tile framebuffer
+        struct {
+            uint8_t tile_code;      // 8-bit tile index
+            uint8_t color_code;     // 3-bit subpalette index
+        } tiles[DISPLAY_TILES_Y][DISPLAY_TILES_X];
+
+        // sokol-gfx resources
         sg_pass_action pass_action;
         sg_buffer vbuf;
         sg_image img;
         sg_pipeline pip;
+
+        // intermediate vertex buffer for tile- and sprite-rendering
         int num_vertices;
-        uint8_t tiles[DISPLAY_TILES_Y][DISPLAY_TILES_X];
         gfx_vertex_t vertices[MAX_VERTICES];
+
+        // scratch-buffer for tile-decoding (only happens once)
         uint8_t tile_pixels[TILE_TEXTURE_HEIGHT][TILE_TEXTURE_WIDTH];
     } gfx;
 } state;
@@ -282,19 +292,19 @@ static void gfx_init(void) {
     // file the tile buffer with a test pattern
     for (uint8_t x = 0, tile_code = 0; x < 16; x++) {
         for (uint8_t y = 0; y < 32; y++, tile_code++) {
-            state.gfx.tiles[y][x] = tile_code;
+            state.gfx.tiles[y][x].tile_code = tile_code;
         }
     }
 }
 
-static inline void gfx_add_vertex(float x, float y, uint8_t u, uint8_t v) {
+static inline void gfx_add_vertex(float x, float y, uint8_t u, uint8_t v, uint8_t color_code) {
     gfx_vertex_t* vtx = &state.gfx.vertices[state.gfx.num_vertices++];
     vtx->x = x;
     vtx->y = y;
-    vtx->data = (v<<8) | u;
+    vtx->data = (color_code << 16) | (v<<8) | u;
 }
 
-static inline void gfx_add_tile_vertices(uint32_t x, uint32_t y, uint8_t tile_code) {
+static inline void gfx_add_tile_vertices(uint32_t x, uint32_t y, uint8_t tile_code, uint8_t color_code) {
     const float dx = 1.0f / DISPLAY_TILES_X;
     const float dy = 1.0f / DISPLAY_TILES_Y;
     const float x0 = x * dx;
@@ -315,12 +325,12 @@ static inline void gfx_add_tile_vertices(uint32_t x, uint32_t y, uint8_t tile_co
         +-----+
               x1,y1
     */
-    gfx_add_vertex(x0, y0, u0, v0);
-    gfx_add_vertex(x1, y0, u1, v0);
-    gfx_add_vertex(x1, y1, u1, v1);
-    gfx_add_vertex(x0, y0, u0, v0);
-    gfx_add_vertex(x1, y1, u1, v1);
-    gfx_add_vertex(x0, y1, u0, v1);
+    gfx_add_vertex(x0, y0, u0, v0, color_code);
+    gfx_add_vertex(x1, y0, u1, v0, color_code);
+    gfx_add_vertex(x1, y1, u1, v1, color_code);
+    gfx_add_vertex(x0, y0, u0, v0, color_code);
+    gfx_add_vertex(x1, y1, u1, v1, color_code);
+    gfx_add_vertex(x0, y1, u0, v1, color_code);
 }
 
 static void gfx_draw(void) {
@@ -329,7 +339,9 @@ static void gfx_draw(void) {
     state.gfx.num_vertices = 0;
     for (uint32_t y = 0; y < DISPLAY_TILES_Y; y++) {
         for (uint32_t x = 0; x < DISPLAY_TILES_X; x++) {
-            gfx_add_tile_vertices(x, y, state.gfx.tiles[y][x]);
+            uint8_t tile_code = state.gfx.tiles[y][x].tile_code;
+            uint8_t color_code = state.gfx.tiles[y][x].color_code;
+            gfx_add_tile_vertices(x, y, tile_code, color_code);
         }
     }
     assert(state.gfx.num_vertices <= MAX_VERTICES);

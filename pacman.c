@@ -7,6 +7,7 @@
 #include "sokol_time.h"
 #include "sokol_glue.h"
 #include <assert.h>
+#include <string.h> // memset()
 
 // constants and types
 #define TILE_WIDTH      (8)
@@ -20,6 +21,18 @@
 #define TILE_TEXTURE_WIDTH (2048)
 #define TILE_TEXTURE_HEIGHT (24)
 
+typedef enum {
+    GAMESTATE_INTRO,
+    GAMESTATE_GAMELOOP,
+    GAMESTATE_HISCORE,
+} gamestate_t;
+
+// a trigger starts an action when a specific game tick is reached
+typedef struct {
+    uint32_t tick;
+} trigger_t;
+
+// the tile- and sprite-renderer's vertex structure
 typedef struct {
     float x, y;         // screen coords [0..1] as FLOAT2
     float u, v;         // tile texture coords
@@ -28,6 +41,17 @@ typedef struct {
 
 // all state is in a single nested struct
 static struct {
+    // the central game tick, this controls everything
+    uint32_t tick;
+
+    // top-level gamestate defines if we're in the intro, game or hiscore screen
+    gamestate_t game_state;
+
+    struct {
+        trigger_t intro;        // enter intro state
+        trigger_t gameloop;     // enter gameloop state
+        trigger_t hiscore;      // enter hiscore state
+    } triggers;
 
     // the current input state
     struct {
@@ -66,6 +90,13 @@ static void frame(void);
 static void cleanup(void);
 static void input(const sapp_event*);
 
+static void trigger(trigger_t* t, uint32_t ticks);
+
+static void game_update(void);
+static void intro_update(void);
+static void gameloop_update(void);
+static void hiscore_update(void);
+
 static void gfx_init(void);
 static void gfx_draw(void);
 
@@ -97,9 +128,13 @@ static void init(void) {
 
     // initialize subsystems
     gfx_init();
+
+    // start into intro screen
+    trigger(&state.triggers.intro, 1);
 }
 
 static void frame(void) {
+    game_update();
     gfx_draw();
 }
 
@@ -135,6 +170,122 @@ static void cleanup(void) {
     saudio_shutdown();
 }
 
+/*== HELPER FUNCTIONS ========================================================*/
+
+// active trigger N ticks in the future
+static void trigger(trigger_t* t, uint32_t ticks) {
+    t->tick = state.tick + ticks;
+}
+
+// check if a trigger is triggered
+static bool triggered(const trigger_t* t) {
+    return t->tick == state.tick;
+}
+
+// return the number of ticks since trigger was triggered
+static uint32_t since(const trigger_t* t) {
+    if (state.tick > t->tick) {
+        return state.tick - t->tick;
+    }
+    else {
+        return 0;
+    }
+}
+
+// clear tile buffer
+static void vid_clear(uint8_t tile_code, uint8_t color_code) {
+    memset(&state.gfx.video_ram, tile_code, sizeof(state.gfx.video_ram));
+    memset(&state.gfx.color_ram, color_code, sizeof(state.gfx.color_ram));
+}
+
+// render colored text into the tile buffer
+static void vid_text(uint8_t x, uint8_t y, uint8_t color_code, const char* text) {
+    assert((x < DISPLAY_TILES_X) && (y < DISPLAY_TILES_Y));
+    uint8_t chr;
+    while ((chr = (uint8_t) *text++)) {
+        if (x < DISPLAY_TILES_X) {
+            switch (chr) {
+                case ' ': chr = 64; break;
+                case '/': chr = 58; break;
+                case '-': chr = 59; break;
+                case '\"': chr = 38; break;
+                default: break;
+            }
+            state.gfx.video_ram[y][x] = chr;
+            state.gfx.color_ram[y][x] = color_code;
+            x++;
+        }
+        else {
+            break;
+        }
+    }
+}
+
+/*== TOP-LEVEL GAME CODE =====================================================*/
+static void game_update(void) {
+    state.tick++;
+
+    // check for game state change
+    if (triggered(&state.triggers.intro)) {
+        state.game_state = GAMESTATE_INTRO;
+    }
+    if (triggered(&state.triggers.gameloop)) {
+        state.game_state = GAMESTATE_GAMELOOP;
+    }
+    if (triggered(&state.triggers.hiscore)) {
+        state.game_state = GAMESTATE_HISCORE;
+    }
+
+    // call the top-level game state update function
+    switch (state.game_state) {
+        case GAMESTATE_INTRO:
+            intro_update();
+            break;
+        case GAMESTATE_GAMELOOP:
+            gameloop_update();
+            break;
+        case GAMESTATE_HISCORE:
+            hiscore_update();
+            break;
+    }
+}
+
+/*== INTRO GAMESTATE CODE ====================================================*/
+
+static void intro_draw(void) {
+    vid_clear(0x40, 0x10);
+    vid_text(3, 0,  0x8F, "1UP   HIGH SCORE   2UP");
+    vid_text(5, 1,  0x8F, "00");
+    vid_text(7, 5,  0x8F, "CHARACTER / NICKNAME");
+    if (since(&state.triggers.intro) > 2 * 60) {
+        vid_text(7, 7,  0x81, "-SHADOW    \"BLINKY\"");
+    }
+    if (since(&state.triggers.intro) > 3 * 60) {
+        vid_text(7, 10, 0x83, "-SPEEDY    \"PINKY\"");
+    }
+    if (since(&state.triggers.intro) > 4 * 60) {
+        vid_text(7, 13, 0x85, "-BASHFUL   \"INKY\"");
+    }
+    if (since(&state.triggers.intro) > 5 * 60) {
+        vid_text(7, 16, 0x87, "-POKEY     \"CLYDE\"");
+    }
+    vid_text(3, 35, 0x8F, "CREDIT  0");
+}
+
+static void intro_update(void) {
+    intro_draw();
+}
+
+/*== HISCORE GAMESTATE CODE ==================================================*/
+static void hiscore_update(void) {
+    // FIXME
+}
+
+/*== GAMELOOP GAMESTATE CODE =================================================*/
+static void gameloop_update(void) {
+    // FIXME
+}
+
 /*== GFX SUBSYSTEM ===========================================================*/
 
 /*
@@ -165,7 +316,7 @@ static inline void gfx_decode_tile_8x4(
             uint8_t p_hi = (tile_base[ti] >> (7 - ty)) & 1;
             uint8_t p_lo = (tile_base[ti] >> (3 - ty)) & 1;
             uint8_t p = (p_hi << 1) | p_lo;
-            state.gfx.tile_pixels[tex_y + ty][tex_x + tx] = p * 64;
+            state.gfx.tile_pixels[tex_y + ty][tex_x + tx] = p;
         }
     }
 }
@@ -249,11 +400,10 @@ static void gfx_init(void) {
                 "                      sampler tile_smp [[sampler(0)]],\n"
                 "                      sampler pal_smp [[sampler(1)]])\n"
                 "{\n"
-                "  float pal_select = in.data.x;\n" // (0..31) / 255
+                "  float color_code = in.data.x;\n" // (0..31) / 255
                 "  float tile_color = tile_tex.sample(tile_smp, in.uv).x;\n" // (0..3) / 255
-                "  float2 pal_uv = float2(pal_select * 4 + tile_color, 0);\n"
+                "  float2 pal_uv = float2(color_code * 4 + tile_color, 0);\n"
                 "  float4 color = pal_tex.sample(pal_smp, pal_uv);\n"
-"  color = float4(tile_color, 0, 0, 1);\n"
                 "  return color;\n"
                 "}\n";
             break;
@@ -344,14 +494,6 @@ static void gfx_init(void) {
             .size = sizeof(color_palette)
         }
     });
-
-    // fill the tile buffer with a test pattern
-    for (uint8_t x = 0, tile_code = 0; x < 16; x++) {
-        for (uint8_t y = 0; y < 32; y++, tile_code++) {
-            state.gfx.video_ram[y][x] = tile_code;
-            state.gfx.color_ram[y][x] = x * 32 + y;
-        }
-    }
 }
 
 static inline void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code) {

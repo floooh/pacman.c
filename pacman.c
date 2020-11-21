@@ -253,23 +253,25 @@ static void game_update(void) {
 /*== INTRO GAMESTATE CODE ====================================================*/
 
 static void intro_draw(void) {
-    vid_clear(0x40, 0x10);
-    vid_text(3, 0,  0x8F, "1UP   HIGH SCORE   2UP");
-    vid_text(5, 1,  0x8F, "00");
-    vid_text(7, 5,  0x8F, "CHARACTER / NICKNAME");
-    if (since(&state.triggers.intro) > 2 * 60) {
+    if (since(&state.triggers.intro) == 1) {
+        vid_clear(0x40, 0x10);
+        vid_text(3, 0,  0x8F, "1UP   HIGH SCORE   2UP");
+        vid_text(5, 1,  0x8F, "00");
+        vid_text(7, 5,  0x8F, "CHARACTER / NICKNAME");
+        vid_text(3, 35, 0x8F, "CREDIT  0");
+    }
+    if (since(&state.triggers.intro) == 2 * 60) {
         vid_text(7, 7,  0x81, "-SHADOW    \"BLINKY\"");
     }
-    if (since(&state.triggers.intro) > 3 * 60) {
+    if (since(&state.triggers.intro) == 3 * 60) {
         vid_text(7, 10, 0x83, "-SPEEDY    \"PINKY\"");
     }
-    if (since(&state.triggers.intro) > 4 * 60) {
+    if (since(&state.triggers.intro) == 4 * 60) {
         vid_text(7, 13, 0x85, "-BASHFUL   \"INKY\"");
     }
-    if (since(&state.triggers.intro) > 5 * 60) {
+    if (since(&state.triggers.intro) == 5 * 60) {
         vid_text(7, 16, 0x87, "-POKEY     \"CLYDE\"");
     }
-    vid_text(3, 35, 0x8F, "CREDIT  0");
 }
 
 static void intro_update(void) {
@@ -298,7 +300,7 @@ static void gameloop_update(void) {
     The Pacman ROM tile layout isn't exactly strightforward, both 8x8 tiles
     and 16x16 sprites are built from 8x4 pixel blocks layed out linearly
     in memory, and to add to the confusion, since Pacman is an arcade machine
-    with the display 90 degree totated, all the ROM tile data is counter-rotated.
+    with the display 90 degree rotated, all the ROM tile data is counter-rotated.
 
     Tile decoding only happens once at startup from ROM dumps into a texture.
 */

@@ -15,16 +15,15 @@
 #define SPRITE_HEIGHT   (16)
 #define DISPLAY_TILES_X (28)
 #define DISPLAY_TILES_Y (36)
-#define TEXTURE_TILES_X (32)
-#define TEXTURE_TILES_Y (16)
 #define NUM_SPRITES     (6)
 #define MAX_VERTICES    (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES) * 6)
-#define TILE_TEXTURE_WIDTH   (TEXTURE_TILES_X * TILE_WIDTH)
-#define TILE_TEXTURE_HEIGHT  (TEXTURE_TILES_Y * TILE_HEIGHT)
+#define TILE_TEXTURE_WIDTH (2048)
+#define TILE_TEXTURE_HEIGHT (24)
 
 typedef struct {
     float x, y;         // screen coords [0..1] as FLOAT2
-    uint32_t data;      // x,y: tile texcoords (32*32)
+    float u, v;         // tile texture coords
+    uint32_t attr;      // x: color code
 } gfx_vertex_t;
 
 // all state is in a single nested struct
@@ -42,15 +41,14 @@ static struct {
     // the gfx subsystem implements a simple tile+sprite renderer
     struct {
         // the 36x28 tile framebuffer
-        struct {
-            uint8_t tile_code;      // 8-bit tile index
-            uint8_t color_code;     // 3-bit subpalette index
-        } tiles[DISPLAY_TILES_Y][DISPLAY_TILES_X];
+        uint8_t video_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // tile codes
+        uint8_t color_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // color codes
 
         // sokol-gfx resources
         sg_pass_action pass_action;
         sg_buffer vbuf;
-        sg_image img;
+        sg_image tile_img;
+        sg_image palette_img;
         sg_pipeline pip;
 
         // intermediate vertex buffer for tile- and sprite-rendering
@@ -73,6 +71,8 @@ static void gfx_draw(void);
 
 static uint8_t rom_tiles[4096];
 static uint8_t rom_sprites[4096];
+static uint8_t rom_hwcolors[32];
+static uint8_t rom_palette[256];
 
 /*== APPLICATION ENTRY AND CALLBACKS =========================================*/
 sapp_desc sokol_main(int argc, char* argv[]) {
@@ -165,15 +165,15 @@ static inline void gfx_decode_tile_8x4(
             uint8_t p_hi = (tile_base[ti] >> (7 - ty)) & 1;
             uint8_t p_lo = (tile_base[ti] >> (3 - ty)) & 1;
             uint8_t p = (p_hi << 1) | p_lo;
-            state.gfx.tile_pixels[tex_y + ty][tex_x + tx] = (p << 6);
+            state.gfx.tile_pixels[tex_y + ty][tex_x + tx] = p * 64;
         }
     }
 }
 
 /* decode an 8x8 tile into the tile texture's upper half */
 static inline void gfx_decode_tile(uint8_t tile_code) {
-    uint32_t x  = (tile_code & (TEXTURE_TILES_X - 1)) * TILE_WIDTH;
-    uint32_t y0 = (tile_code / TEXTURE_TILES_X) * TILE_HEIGHT;
+    uint32_t x = tile_code * TILE_WIDTH;
+    uint32_t y0 = 0;
     uint32_t y1 = y0 + (TILE_HEIGHT / 2);
     gfx_decode_tile_8x4(x, y0, rom_tiles, 16, 8, tile_code);
     gfx_decode_tile_8x4(x, y1, rom_tiles, 16, 0, tile_code);
@@ -181,9 +181,9 @@ static inline void gfx_decode_tile(uint8_t tile_code) {
 
 /* decode a 16x16 sprite into the tile texture's lower half */
 static inline void gfx_decode_sprite(uint8_t sprite_code) {
-    uint32_t x0 = (sprite_code & (TEXTURE_TILES_X / 2 - 1)) * (TILE_WIDTH * 2);
+    uint32_t x0 = sprite_code * SPRITE_WIDTH;
     uint32_t x1 = x0 + TILE_WIDTH;
-    uint32_t y0 = (TILE_TEXTURE_HEIGHT / 2) + ((sprite_code / (TEXTURE_TILES_X / 2)) * (TILE_HEIGHT * 2));
+    uint32_t y0 = TILE_HEIGHT;
     uint32_t y1 = y0 + (TILE_HEIGHT / 2);
     uint32_t y2 = y1 + (TILE_HEIGHT / 2);
     uint32_t y3 = y2 + (TILE_HEIGHT / 2);
@@ -221,27 +221,40 @@ static void gfx_init(void) {
                 "using namespace metal;\n"
                 "struct vs_in {\n"
                 "  float4 pos [[attribute(0)]];\n"
-                "  float4 data [[attribute(1)]];\n"
+                "  float2 uv [[attribute(1)]];\n"
+                "  float4 data [[attribute(2)]];\n"
                 "};\n"
                 "struct vs_out {\n"
                 "  float4 pos [[position]];\n"
                 "  float2 uv;\n"
+                "  float4 data;\n"
                 "};\n"
                 "vertex vs_out _main(vs_in in [[stage_in]]) {\n"
                 "  vs_out out;\n"
                 "  out.pos = float4((in.pos.xy - 0.5) * float2(2.0, -2.0), 0.5, 1.0);\n"
-                "  out.uv = in.data.xy * float2(8, 16);\n"
+                "  out.uv  = in.uv;"
+                "  out.data = in.data;\n"
                 "  return out;\n"
                 "}\n";
             fs_src =
                 "#include <metal_stdlib>\n"
                 "using namespace metal;\n"
-                "fragment float4 _main(float2 uv [[stage_in]],\n"
-                "                      texture2d<float> tex [[texture(0)]],\n"
-                "                      sampler smp [[sampler(0)]])\n"
+                "struct ps_in {\n"
+                "  float2 uv;\n"
+                "  float4 data;\n"
+                "};\n"
+                "fragment float4 _main(ps_in in [[stage_in]],\n"
+                "                      texture2d<float> tile_tex [[texture(0)]],\n"
+                "                      texture2d<float> pal_tex [[texture(1)]],\n"
+                "                      sampler tile_smp [[sampler(0)]],\n"
+                "                      sampler pal_smp [[sampler(1)]])\n"
                 "{\n"
-                "  float x = tex.sample(smp, uv).x;\n"
-                "  return float4(x, 0, 0, 1);\n"
+                "  float pal_select = in.data.x;\n" // (0..31) / 255
+                "  float tile_color = tile_tex.sample(tile_smp, in.uv).x;\n" // (0..3) / 255
+                "  float2 pal_uv = float2(pal_select * 4 + tile_color, 0);\n"
+                "  float4 color = pal_tex.sample(pal_smp, pal_uv);\n"
+"  color = float4(tile_color, 0, 0, 1);\n"
+                "  return color;\n"
                 "}\n";
             break;
         default:
@@ -254,13 +267,15 @@ static void gfx_init(void) {
             .vs.source = vs_src,
             .fs = {
                 .images[0].type = SG_IMAGETYPE_2D,
+                .images[1].type = SG_IMAGETYPE_2D,
                 .source = fs_src
             }
         }),
         .layout = {
             .attrs = {
                 [0].format = SG_VERTEXFORMAT_FLOAT2,
-                [1].format = SG_VERTEXFORMAT_UBYTE4N,
+                [1].format = SG_VERTEXFORMAT_FLOAT2,
+                [2].format = SG_VERTEXFORMAT_UBYTE4N,
             }
         },
         .blend = {
@@ -277,10 +292,12 @@ static void gfx_init(void) {
     for (uint32_t sprite_code = 0; sprite_code < 64; sprite_code++) {
         gfx_decode_sprite(sprite_code);
     }
-    state.gfx.img = sg_make_image(&(sg_image_desc){
+    state.gfx.tile_img = sg_make_image(&(sg_image_desc){
         .width  = TILE_TEXTURE_WIDTH,
         .height = TILE_TEXTURE_HEIGHT,
         .pixel_format = SG_PIXELFORMAT_R8,
+        .min_filter = SG_FILTER_NEAREST,
+        .mag_filter = SG_FILTER_NEAREST,
         .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
         .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
         .content.subimage[0][0] = {
@@ -289,19 +306,61 @@ static void gfx_init(void) {
         }
     });
 
-    // file the tile buffer with a test pattern
+    /* decode the Pacman color palette into a palette texture, on the original
+        hardware, color lookup happens in two steps, first through 256-entry
+        palette which indirects into a 32-entry hardware-color palette
+        (of which only 16 entries are used on the Pacman hardware)
+    */
+    uint32_t hw_colors[32];
+    for (int i = 0; i < 32; i++) {
+       /*
+           Each color ROM entry describes an RGB color in 1 byte:
+
+           | 7| 6| 5| 4| 3| 2| 1| 0|
+           |B1|B0|G2|G1|G0|R2|R1|R0|
+
+           Intensities are: 0x97 + 0x47 + 0x21
+        */
+        uint8_t rgb = rom_hwcolors[i];
+        uint8_t r = ((rgb>>0)&1) * 0x21 + ((rgb>>1)&1) * 0x47 + ((rgb>>2)&1) * 0x97;
+        uint8_t g = ((rgb>>3)&1) * 0x21 + ((rgb>>4)&1) * 0x47 + ((rgb>>5)&1) * 0x97;
+        uint8_t b = ((rgb>>6)&1) * 0x47 + ((rgb>>7)&1) * 0x97;
+        hw_colors[i] = 0xFF000000 | (b<<16) | (g<<8) | r;
+    }
+    uint32_t color_palette[256];
+    for (int i = 0; i < 256; i++) {
+        color_palette[i] = hw_colors[rom_palette[i] & 0xF];
+    }
+    state.gfx.palette_img = sg_make_image(&(sg_image_desc){
+        .width = 256,
+        .height = 1,
+        .pixel_format = SG_PIXELFORMAT_RGBA8,
+        .min_filter = SG_FILTER_NEAREST,
+        .mag_filter = SG_FILTER_NEAREST,
+        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+        .content.subimage[0][0] = {
+            .ptr = color_palette,
+            .size = sizeof(color_palette)
+        }
+    });
+
+    // fill the tile buffer with a test pattern
     for (uint8_t x = 0, tile_code = 0; x < 16; x++) {
         for (uint8_t y = 0; y < 32; y++, tile_code++) {
-            state.gfx.tiles[y][x].tile_code = tile_code;
+            state.gfx.video_ram[y][x] = tile_code;
+            state.gfx.color_ram[y][x] = x * 32 + y;
         }
     }
 }
 
-static inline void gfx_add_vertex(float x, float y, uint8_t u, uint8_t v, uint8_t color_code) {
+static inline void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code) {
     gfx_vertex_t* vtx = &state.gfx.vertices[state.gfx.num_vertices++];
     vtx->x = x;
     vtx->y = y;
-    vtx->data = (color_code << 16) | (v<<8) | u;
+    vtx->u = u;
+    vtx->v = v;
+    vtx->attr = color_code;
 }
 
 static inline void gfx_add_tile_vertices(uint32_t x, uint32_t y, uint8_t tile_code, uint8_t color_code) {
@@ -312,11 +371,14 @@ static inline void gfx_add_tile_vertices(uint32_t x, uint32_t y, uint8_t tile_co
     const float y0 = y * dy;
     const float y1 = y0 + dy;
 
-    // tiles are arranged in the top 32x16 grid of the tile texture
-    uint8_t u0 = tile_code & (TEXTURE_TILES_X - 1);
-    uint8_t v0 = tile_code / TEXTURE_TILES_X;
-    uint8_t u1 = u0 + 1;
-    uint8_t v1 = v0 + 1;
+    float du = (float)TILE_WIDTH / TILE_TEXTURE_WIDTH;
+    float dv = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
+
+    float u0 = tile_code * du;
+    float u1 = u0 + du;
+    float v0 = 0.0f;
+    float v1 = v0 + dv;
+
     /*
         x0,y0
         +-----+
@@ -339,8 +401,8 @@ static void gfx_draw(void) {
     state.gfx.num_vertices = 0;
     for (uint32_t y = 0; y < DISPLAY_TILES_Y; y++) {
         for (uint32_t x = 0; x < DISPLAY_TILES_X; x++) {
-            uint8_t tile_code = state.gfx.tiles[y][x].tile_code;
-            uint8_t color_code = state.gfx.tiles[y][x].color_code;
+            uint8_t tile_code = state.gfx.video_ram[y][x];
+            uint8_t color_code = state.gfx.color_ram[y][x] & 0x1F;
             gfx_add_tile_vertices(x, y, tile_code, color_code);
         }
     }
@@ -373,7 +435,8 @@ static void gfx_draw(void) {
     sg_apply_pipeline(state.gfx.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.vbuf,
-        .fs_images[0] = state.gfx.img,
+        .fs_images[0] = state.gfx.tile_img,
+        .fs_images[1] = state.gfx.palette_img,
     });
     sg_draw(0, state.gfx.num_vertices, 1);
     sg_end_pass();
@@ -895,6 +958,31 @@ static uint8_t rom_sprites[4096] = {
     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x22, 0x11, 0x0, 0x0, 0x0, 0x11, 0x99, 0x44, 0x0, 0x0,
     0x0, 0x22, 0x11, 0x88, 0x44, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
     0x0, 0x11, 0x22, 0x0, 0x11, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x88, 0x22, 0x22, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+};
+
+
+static uint8_t rom_hwcolors[32] = {
+    0x0, 0x7, 0x66, 0xef, 0x0, 0xf8, 0xea, 0x6f, 0x0, 0x3f, 0x0, 0xc9, 0x38, 0xaa, 0xaf, 0xf6,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+};
+
+static uint8_t rom_palette[256] = {
+    0x0, 0x0, 0x0, 0x0, 0x0, 0xf, 0xb, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf, 0xb, 0x3,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0xf, 0xb, 0x5, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf, 0xb, 0x7,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0xb, 0x1, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf, 0x0, 0xe, 0x0, 0x1, 0xc, 0xf,
+    0x0, 0xe, 0x0, 0xb, 0x0, 0xc, 0xb, 0xe, 0x0, 0xc, 0xf, 0x1, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x1, 0x2, 0xf, 0x0, 0x7, 0xc, 0x2, 0x0, 0x9, 0x6, 0xf, 0x0, 0xd, 0xc, 0xf,
+    0x0, 0x5, 0x3, 0x9, 0x0, 0xf, 0xb, 0x0, 0x0, 0xe, 0x0, 0xb, 0x0, 0xe, 0x0, 0xb,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0xf, 0xe, 0x1, 0x0, 0xf, 0xb, 0xe, 0x0, 0xe, 0x0, 0xf,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,

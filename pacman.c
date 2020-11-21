@@ -172,7 +172,7 @@ static void cleanup(void) {
 
 /*== HELPER FUNCTIONS ========================================================*/
 
-// active trigger N ticks in the future
+// activate trigger N ticks in the future
 static void trigger(trigger_t* t, uint32_t ticks) {
     t->tick = state.tick + ticks;
 }

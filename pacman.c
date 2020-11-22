@@ -93,10 +93,10 @@ static void input(const sapp_event*);
 
 static void start(trigger_t* t);
 
-static void game_update(void);
-static void intro_update(void);
-static void gameloop_update(void);
-static void hiscore_update(void);
+static void game_tick(void);
+static void intro_tick(void);
+static void gameloop_tick(void);
+static void hiscore_tick(void);
 
 static void input_enable(void);
 static void input_disable(void);
@@ -138,8 +138,8 @@ static void init(void) {
 }
 
 static void frame(void) {
-    // FIXME: decouple game_update() from refresh rate
-    game_update();
+    // FIXME: decouple game_tick() from refresh rate
+    game_tick();
     gfx_draw();
 }
 
@@ -225,7 +225,14 @@ static void vid_clear(uint8_t tile_code, uint8_t color_code) {
     memset(&state.gfx.color_ram, color_code, sizeof(state.gfx.color_ram));
 }
 
-// render colored text into the tile buffer
+// put a colored tile into the tile buffer
+static void vid_tile(uint8_t x, uint8_t y, uint8_t color_code, uint8_t tile_code) {
+    assert((x < DISPLAY_TILES_X) && (y < DISPLAY_TILES_Y));
+    state.gfx.video_ram[y][x] = tile_code;
+    state.gfx.color_ram[y][x] = color_code;
+}
+
+// put colored text into the tile buffer
 static void vid_text(uint8_t x, uint8_t y, uint8_t color_code, const char* text) {
     assert((x < DISPLAY_TILES_X) && (y < DISPLAY_TILES_Y));
     uint8_t chr;
@@ -250,7 +257,7 @@ static void vid_text(uint8_t x, uint8_t y, uint8_t color_code, const char* text)
 }
 
 /*== TOP-LEVEL GAME CODE =====================================================*/
-static void game_update(void) {
+static void game_tick(void) {
     state.tick++;
 
     // check for game state change
@@ -267,21 +274,22 @@ static void game_update(void) {
     // call the top-level game state update function
     switch (state.game_state) {
         case GAMESTATE_INTRO:
-            intro_update();
+            intro_tick();
             break;
         case GAMESTATE_GAMELOOP:
-            gameloop_update();
+            gameloop_tick();
             break;
         case GAMESTATE_HISCORE:
-            hiscore_update();
+            hiscore_tick();
             break;
     }
 }
 
 /*== INTRO GAMESTATE CODE ====================================================*/
 
-static void intro_update(void) {
-    // draw the intro screen
+static void intro_tick(void) {
+
+    // on intro-state enter, enable input and draw any initial text
     if (now(&state.triggers.intro)) {
         input_enable();
         vid_clear(0x40, 0x0);
@@ -290,17 +298,52 @@ static void intro_update(void) {
         vid_text(7, 5,  0xF, "CHARACTER / NICKNAME");
         vid_text(3, 35, 0xF, "CREDIT  0");
     }
-    if (after(&state.triggers.intro, 2*60)) {
-        vid_text(7, 7,  0x1, "-SHADOW    \"BLINKY\"");
+
+    // draw the animated 'ghost image.. name.. nickname' lines
+    uint32_t delay = 30;
+    const char* names[] = { "-SHADOW", "-SPEEDY", "-BASHFUL", "-POKEY" };
+    const char* nicknames[] = { "BLINKY", "PINKY", "INKY", "CLYDE" };
+    for (int i = 0; i < 4; i++) {
+        const uint8_t color = 2*i + 1;
+        const uint8_t y = 3*i + 6;
+        // 2*3 ghost image created from tiles (no sprite!)
+        delay += 30;
+        if (after(&state.triggers.intro, delay)) {
+            vid_tile(4, y+0, color, 0xB0); vid_tile(5, y+0, color, 0xB1);
+            vid_tile(4, y+1, color, 0xB2); vid_tile(5, y+1, color, 0xB3);
+            vid_tile(4, y+2, color, 0xB4); vid_tile(5, y+2, color, 0xB5);
+        }
+        // after 1 second, the name of the ghost
+        delay += 60;
+        if (after(&state.triggers.intro, delay)) {
+            vid_text(7, y+1, color, names[i]);
+        }
+        // after 0.5 seconds, the nickname of the ghost
+        delay += 30;
+        if (after(&state.triggers.intro, delay)) {
+            vid_text(17, y+1, color, nicknames[i]);
+        }
     }
-    if (after(&state.triggers.intro, 3 * 60)) {
-        vid_text(7, 10, 0x3, "-SPEEDY    \"PINKY\"");
+
+    // . 10 PTS
+    // O 50 PTS
+    delay += 60;
+    if (after(&state.triggers.intro, delay)) {
+        vid_tile(10, 23, 0x1F, 0x10);
+        vid_text(12, 23, 0x1F, "10 \x5D\x5E\x5F");
+        vid_tile(10, 25, 0x1F, 0x14);
+        vid_text(12, 25, 0x1F, "50 \x5D\x5E\x5F");
     }
-    if (after(&state.triggers.intro, 4 * 60)) {
-        vid_text(7, 13, 0x5, "-BASHFUL   \"INKY\"");
-    }
-    if (after(&state.triggers.intro, 5 * 60)) {
-        vid_text(7, 16, 0x7, "-POKEY     \"CLYDE\"");
+
+    // blinking "press any key" text
+    delay += 60;
+    if (since(&state.triggers.intro) > delay) {
+        if (since(&state.triggers.intro) & 0x20) {
+            vid_text(3, 30, 3, "                       ");
+        }
+        else {
+            vid_text(3, 30, 3, "PRESS ANY KEY TO START!");
+        }
     }
 
     // if a key is pressed, advance to gameloop state
@@ -311,7 +354,7 @@ static void intro_update(void) {
 }
 
 /*== HISCORE GAMESTATE CODE ==================================================*/
-static void hiscore_update(void) {
+static void hiscore_tick(void) {
     if (now(&state.triggers.hiscore)) {
         input_enable();
         vid_clear(0x40, 0x0);
@@ -324,7 +367,7 @@ static void hiscore_update(void) {
 }
 
 /*== GAMELOOP GAMESTATE CODE =================================================*/
-static void gameloop_update(void) {
+static void gameloop_tick(void) {
     if (now(&state.triggers.gameloop)) {
         input_enable();
         vid_clear(0x40, 0x0);

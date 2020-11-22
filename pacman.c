@@ -55,6 +55,7 @@ static struct {
 
     // the current input state
     struct {
+        bool enabled;
         bool up;
         bool down;
         bool left;
@@ -90,12 +91,15 @@ static void frame(void);
 static void cleanup(void);
 static void input(const sapp_event*);
 
-static void trigger(trigger_t* t, uint32_t ticks);
+static void start(trigger_t* t);
 
 static void game_update(void);
 static void intro_update(void);
 static void gameloop_update(void);
 static void hiscore_update(void);
+
+static void input_enable(void);
+static void input_disable(void);
 
 static void gfx_init(void);
 static void gfx_draw(void);
@@ -130,37 +134,40 @@ static void init(void) {
     gfx_init();
 
     // start into intro screen
-    trigger(&state.triggers.intro, 1);
+    start(&state.triggers.intro);
 }
 
 static void frame(void) {
+    // FIXME: decouple game_update() from refresh rate
     game_update();
     gfx_draw();
 }
 
 static void input(const sapp_event* ev) {
-    if ((ev->type == SAPP_EVENTTYPE_KEY_DOWN) || (ev->type == SAPP_EVENTTYPE_KEY_UP)) {
-        bool btn_down = ev->type == SAPP_EVENTTYPE_KEY_DOWN;
-        switch (ev->key_code) {
-            case SAPP_KEYCODE_UP:
-            case SAPP_KEYCODE_W:
-                state.input.up = state.input.any = btn_down;
-                break;
-            case SAPP_KEYCODE_DOWN:
-            case SAPP_KEYCODE_S:
-                state.input.down = state.input.any = btn_down;
-                break;
-            case SAPP_KEYCODE_LEFT:
-            case SAPP_KEYCODE_A:
-                state.input.left = state.input.any = btn_down;
-                break;
-            case SAPP_KEYCODE_RIGHT:
-            case SAPP_KEYCODE_D:
-                state.input.right = state.input.any = btn_down;
-                break;
-            default:
-                state.input.any = btn_down;
-                break;
+    if (state.input.enabled) {
+        if ((ev->type == SAPP_EVENTTYPE_KEY_DOWN) || (ev->type == SAPP_EVENTTYPE_KEY_UP)) {
+            bool btn_down = ev->type == SAPP_EVENTTYPE_KEY_DOWN;
+            switch (ev->key_code) {
+                case SAPP_KEYCODE_UP:
+                case SAPP_KEYCODE_W:
+                    state.input.up = state.input.any = btn_down;
+                    break;
+                case SAPP_KEYCODE_DOWN:
+                case SAPP_KEYCODE_S:
+                    state.input.down = state.input.any = btn_down;
+                    break;
+                case SAPP_KEYCODE_LEFT:
+                case SAPP_KEYCODE_A:
+                    state.input.left = state.input.any = btn_down;
+                    break;
+                case SAPP_KEYCODE_RIGHT:
+                case SAPP_KEYCODE_D:
+                    state.input.right = state.input.any = btn_down;
+                    break;
+                default:
+                    state.input.any = btn_down;
+                    break;
+            }
         }
     }
 }
@@ -172,13 +179,18 @@ static void cleanup(void) {
 
 /*== HELPER FUNCTIONS ========================================================*/
 
-// activate trigger N ticks in the future
-static void trigger(trigger_t* t, uint32_t ticks) {
+// activate trigger in next tick
+static void start(trigger_t* t) {
+    t->tick = state.tick + 1;
+}
+
+// activate trigger in any future tick
+static void start_in(trigger_t* t, uint32_t ticks) {
     t->tick = state.tick + ticks;
 }
 
 // check if a trigger is triggered
-static bool triggered(const trigger_t* t) {
+static bool now(const trigger_t* t) {
     return t->tick == state.tick;
 }
 
@@ -190,6 +202,21 @@ static uint32_t since(const trigger_t* t) {
     else {
         return 0;
     }
+}
+
+// check if trigger was triggered N ticks ago
+static bool after(const trigger_t* t, uint32_t ticks) {
+    return since(t) == ticks;
+}
+
+// clear input state and disable input
+static void input_disable(void) {
+    memset(&state.input, 0, sizeof(state.input));
+}
+
+// enable input again
+static void input_enable(void) {
+    state.input.enabled = true;
 }
 
 // clear tile buffer
@@ -205,10 +232,11 @@ static void vid_text(uint8_t x, uint8_t y, uint8_t color_code, const char* text)
     while ((chr = (uint8_t) *text++)) {
         if (x < DISPLAY_TILES_X) {
             switch (chr) {
-                case ' ': chr = 64; break;
-                case '/': chr = 58; break;
-                case '-': chr = 59; break;
-                case '\"': chr = 38; break;
+                case ' ':   chr = 64; break;
+                case '/':   chr = 58; break;
+                case '-':   chr = 59; break;
+                case '\"':  chr = 38; break;
+                case '!':   chr = 'Z'+1; break;
                 default: break;
             }
             state.gfx.video_ram[y][x] = chr;
@@ -226,13 +254,13 @@ static void game_update(void) {
     state.tick++;
 
     // check for game state change
-    if (triggered(&state.triggers.intro)) {
+    if (now(&state.triggers.intro)) {
         state.game_state = GAMESTATE_INTRO;
     }
-    if (triggered(&state.triggers.gameloop)) {
+    if (now(&state.triggers.gameloop)) {
         state.game_state = GAMESTATE_GAMELOOP;
     }
-    if (triggered(&state.triggers.hiscore)) {
+    if (now(&state.triggers.hiscore)) {
         state.game_state = GAMESTATE_HISCORE;
     }
 
@@ -252,40 +280,60 @@ static void game_update(void) {
 
 /*== INTRO GAMESTATE CODE ====================================================*/
 
-static void intro_draw(void) {
-    if (since(&state.triggers.intro) == 1) {
-        vid_clear(0x40, 0x10);
-        vid_text(3, 0,  0x8F, "1UP   HIGH SCORE   2UP");
-        vid_text(5, 1,  0x8F, "00");
-        vid_text(7, 5,  0x8F, "CHARACTER / NICKNAME");
-        vid_text(3, 35, 0x8F, "CREDIT  0");
-    }
-    if (since(&state.triggers.intro) == 2 * 60) {
-        vid_text(7, 7,  0x81, "-SHADOW    \"BLINKY\"");
-    }
-    if (since(&state.triggers.intro) == 3 * 60) {
-        vid_text(7, 10, 0x83, "-SPEEDY    \"PINKY\"");
-    }
-    if (since(&state.triggers.intro) == 4 * 60) {
-        vid_text(7, 13, 0x85, "-BASHFUL   \"INKY\"");
-    }
-    if (since(&state.triggers.intro) == 5 * 60) {
-        vid_text(7, 16, 0x87, "-POKEY     \"CLYDE\"");
-    }
-}
-
 static void intro_update(void) {
-    intro_draw();
+    // draw the intro screen
+    if (now(&state.triggers.intro)) {
+        input_enable();
+        vid_clear(0x40, 0x0);
+        vid_text(3, 0,  0xF, "1UP   HIGH SCORE   2UP");
+        vid_text(5, 1,  0xF, "00");
+        vid_text(7, 5,  0xF, "CHARACTER / NICKNAME");
+        vid_text(3, 35, 0xF, "CREDIT  0");
+    }
+    if (after(&state.triggers.intro, 2*60)) {
+        vid_text(7, 7,  0x1, "-SHADOW    \"BLINKY\"");
+    }
+    if (after(&state.triggers.intro, 3 * 60)) {
+        vid_text(7, 10, 0x3, "-SPEEDY    \"PINKY\"");
+    }
+    if (after(&state.triggers.intro, 4 * 60)) {
+        vid_text(7, 13, 0x5, "-BASHFUL   \"INKY\"");
+    }
+    if (after(&state.triggers.intro, 5 * 60)) {
+        vid_text(7, 16, 0x7, "-POKEY     \"CLYDE\"");
+    }
+
+    // if a key is pressed, advance to gameloop state
+    if (state.input.any) {
+        input_disable();
+        start(&state.triggers.gameloop);
+    }
 }
 
 /*== HISCORE GAMESTATE CODE ==================================================*/
 static void hiscore_update(void) {
-    // FIXME
+    if (now(&state.triggers.hiscore)) {
+        input_enable();
+        vid_clear(0x40, 0x0);
+        vid_text(7, 16, 0xF, "HISCORE TODO!");
+    }
+    if (state.input.any) {
+        input_disable();
+        start(&state.triggers.intro);
+    }
 }
 
 /*== GAMELOOP GAMESTATE CODE =================================================*/
 static void gameloop_update(void) {
-    // FIXME
+    if (now(&state.triggers.gameloop)) {
+        input_enable();
+        vid_clear(0x40, 0x0);
+        vid_text(7, 16, 0xF, "GAMELOOP TODO!");
+    }
+    if (state.input.any) {
+        input_disable();
+        start(&state.triggers.hiscore);
+    }
 }
 
 /*== GFX SUBSYSTEM ===========================================================*/

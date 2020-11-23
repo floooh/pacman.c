@@ -10,22 +10,42 @@
 #include <string.h> // memset()
 
 // constants and types
-#define TILE_WIDTH      (8)
-#define TILE_HEIGHT     (8)
-#define SPRITE_WIDTH    (16)
-#define SPRITE_HEIGHT   (16)
-#define DISPLAY_TILES_X (28)
-#define DISPLAY_TILES_Y (36)
-#define NUM_SPRITES     (6)
-#define MAX_VERTICES    (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES) * 6)
-#define TILE_TEXTURE_WIDTH (2048)
+#define TILE_WIDTH          (8)
+#define TILE_HEIGHT         (8)
+#define SPRITE_WIDTH        (16)
+#define SPRITE_HEIGHT       (16)
+#define DISPLAY_TILES_X     (28)
+#define DISPLAY_TILES_Y     (36)
+#define DISPLAY_PIXELS_X    (DISPLAY_TILES_X * TILE_WIDTH)
+#define DISPLAY_PIXELS_Y    (DISPLAY_TILES_Y * TILE_HEIGHT);
+#define NUM_SPRITES         (6)
+#define TILE_TEXTURE_WIDTH  (2048)
 #define TILE_TEXTURE_HEIGHT (24)
+#define MAX_VERTICES    (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + 1) * 6)
 
 typedef enum {
     GAMESTATE_INTRO,
     GAMESTATE_GAMELOOP,
     GAMESTATE_HISCORE,
 } gamestate_t;
+
+// directions NOTE: bit0==0: horizontal movement, bit0==1: vertical movement
+typedef enum {
+    DIR_RIGHT,  // 00
+    DIR_DOWN,   // 01
+    DIR_LEFT,   // 10
+    DIR_UP,     // 11
+    NUM_DIRS
+} dir_t;
+
+typedef enum {
+    ACTOR_BLINKY,
+    ACTOR_PLINKY,
+    ACTOR_INKY,
+    ACTOR_CLYDE,
+    ACTOR_PACMAN,
+    NUM_ACTORS,
+} actor_t;
 
 // a trigger starts an action when a specific game tick is reached
 typedef struct {
@@ -37,21 +57,37 @@ typedef struct {
     float x, y;         // screen coords [0..1] as FLOAT2
     float u, v;         // tile texture coords
     uint32_t attr;      // x: color code
-} gfx_vertex_t;
+} vertex_t;
+
+// sprite state
+typedef struct {
+    bool enabled;
+    uint8_t tile, color;    // sprite-tile number (0..63), color code
+    bool flipx, flipy;
+    int16_t x, y;           // pixel position
+} sprite_t;
 
 // all state is in a single nested struct
 static struct {
-    // the central game tick, this controls everything
-    uint32_t tick;
 
-    // top-level gamestate defines if we're in the intro, game or hiscore screen
-    gamestate_t game_state;
+    uint32_t tick;          // the central game tick, this controls everything
+    gamestate_t gamestate;  // the current gamestate
 
+    // intro state
     struct {
-        trigger_t intro;        // enter intro state
-        trigger_t gameloop;     // enter gameloop state
-        trigger_t hiscore;      // enter hiscore state
-    } triggers;
+        trigger_t started;
+        trigger_t chase;
+    } intro;
+
+    // hiscore state
+    struct {
+        trigger_t started;
+    } hiscore;
+
+    // gameloop state
+    struct {
+        trigger_t started;
+    } game;
 
     // the current input state
     struct {
@@ -69,6 +105,9 @@ static struct {
         uint8_t video_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // tile codes
         uint8_t color_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // color codes
 
+        // up to 6 sprites
+        sprite_t sprite[NUM_SPRITES];
+
         // sokol-gfx resources
         sg_pass_action pass_action;
         sg_buffer vbuf;
@@ -78,7 +117,7 @@ static struct {
 
         // intermediate vertex buffer for tile- and sprite-rendering
         int num_vertices;
-        gfx_vertex_t vertices[MAX_VERTICES];
+        vertex_t vertices[MAX_VERTICES];
 
         // scratch-buffer for tile-decoding (only happens once)
         uint8_t tile_pixels[TILE_TEXTURE_HEIGHT][TILE_TEXTURE_WIDTH];
@@ -134,7 +173,7 @@ static void init(void) {
     gfx_init();
 
     // start into intro screen
-    start(&state.triggers.intro);
+    start(&state.intro.started);
 }
 
 static void frame(void) {
@@ -189,6 +228,11 @@ static void start_in(trigger_t* t, uint32_t ticks) {
     t->tick = state.tick + ticks;
 }
 
+// deactivate a trigger
+static void never(trigger_t* t) {
+    t->tick = 0xFFFFFFFF;
+}
+
 // check if a trigger is triggered
 static bool now(const trigger_t* t) {
     return t->tick == state.tick;
@@ -202,6 +246,13 @@ static uint32_t since(const trigger_t* t) {
     else {
         return 0;
     }
+}
+
+// check if trigger is between begin and end tick
+static bool phase(const trigger_t* t, uint32_t begin, uint32_t end) {
+    assert((begin > 0) && (begin < end));
+    uint32_t ticks = since(t);
+    return (ticks >= begin) && (ticks < end);
 }
 
 // check if trigger was triggered N ticks ago
@@ -256,23 +307,67 @@ static void vid_text(uint8_t x, uint8_t y, uint8_t color_code, const char* text)
     }
 }
 
+// clear/reset all sprites by placing them outside the screen
+static void spr_clear(void) {
+    memset(&state.gfx.sprite, 0, sizeof(state.gfx.sprite));
+}
+
+// initialize a sprite
+static void spr_init(int index, sprite_t sprite) {
+    assert((index >= 0) && (index < NUM_SPRITES));
+    state.gfx.sprite[index] = sprite;
+    state.gfx.sprite[index].enabled = true;
+}
+
+// set sprite appearance to animated actor
+static void spr_actor_anim(actor_t actor, dir_t dir) {
+    assert((actor >= 0) && (actor < NUM_ACTORS));
+    assert((dir >= 0) && (dir < NUM_DIRS));
+
+    // animation frames for horizontal and vertical movement
+    static const uint8_t pacman_tiles[2][4] = {
+        { 44, 46, 48, 46 }, // horizontal (needs flipx)
+        { 45, 47, 48, 47 }  // vertical (needs flipy)
+    };
+    static const uint8_t ghost_tiles[4][4]  = {
+        { 32, 33, 32, 33 }, // right
+        { 34, 35, 34, 35 }, // down
+        { 36, 37, 36, 37 }, // left
+        { 38, 39, 38, 39 }, // up
+    };
+
+    sprite_t* spr = &state.gfx.sprite[actor];
+    spr->color = actor * 2 + 1;
+    uint32_t phase = (state.tick / 4) % 4;
+    if (actor == ACTOR_PACMAN) {
+        spr->tile  = pacman_tiles[dir & 1][phase];
+        spr->flipx = (dir == DIR_LEFT);
+        spr->flipy = (dir == DIR_UP);
+    }
+    else {
+        spr->tile = ghost_tiles[dir][phase];
+        spr->flipx = false;
+        spr->flipy = false;
+    }
+}
+
 /*== TOP-LEVEL GAME CODE =====================================================*/
 static void game_tick(void) {
     state.tick++;
 
     // check for game state change
-    if (now(&state.triggers.intro)) {
-        state.game_state = GAMESTATE_INTRO;
+    if (now(&state.intro.started)) {
+        state.gamestate = GAMESTATE_INTRO;
     }
-    if (now(&state.triggers.gameloop)) {
-        state.game_state = GAMESTATE_GAMELOOP;
+    if (now(&state.game.started)) {
+        state.gamestate = GAMESTATE_GAMELOOP;
     }
-    if (now(&state.triggers.hiscore)) {
-        state.game_state = GAMESTATE_HISCORE;
+    if (now(&state.hiscore.started)) {
+        state.gamestate = GAMESTATE_HISCORE;
     }
 
     // call the top-level game state update function
-    switch (state.game_state) {
+    switch (state.gamestate) {
         case GAMESTATE_INTRO:
             intro_tick();
             break;
@@ -290,13 +385,15 @@ static void game_tick(void) {
 static void intro_tick(void) {
 
     // on intro-state enter, enable input and draw any initial text
-    if (now(&state.triggers.intro)) {
+    if (now(&state.intro.started)) {
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(3, 0,  0xF, "1UP   HIGH SCORE   2UP");
         vid_text(5, 1,  0xF, "00");
         vid_text(7, 5,  0xF, "CHARACTER / NICKNAME");
         vid_text(3, 35, 0xF, "CREDIT  0");
+        spr_clear();
+        never(&state.intro.chase);
     }
 
     // draw the animated 'ghost image.. name.. nickname' lines
@@ -308,19 +405,19 @@ static void intro_tick(void) {
         const uint8_t y = 3*i + 6;
         // 2*3 ghost image created from tiles (no sprite!)
         delay += 30;
-        if (after(&state.triggers.intro, delay)) {
+        if (after(&state.intro.started, delay)) {
             vid_tile(4, y+0, color, 0xB0); vid_tile(5, y+0, color, 0xB1);
             vid_tile(4, y+1, color, 0xB2); vid_tile(5, y+1, color, 0xB3);
             vid_tile(4, y+2, color, 0xB4); vid_tile(5, y+2, color, 0xB5);
         }
         // after 1 second, the name of the ghost
         delay += 60;
-        if (after(&state.triggers.intro, delay)) {
+        if (after(&state.intro.started, delay)) {
             vid_text(7, y+1, color, names[i]);
         }
         // after 0.5 seconds, the nickname of the ghost
         delay += 30;
-        if (after(&state.triggers.intro, delay)) {
+        if (after(&state.intro.started, delay)) {
             vid_text(17, y+1, color, nicknames[i]);
         }
     }
@@ -328,54 +425,72 @@ static void intro_tick(void) {
     // . 10 PTS
     // O 50 PTS
     delay += 60;
-    if (after(&state.triggers.intro, delay)) {
-        vid_tile(10, 23, 0x1F, 0x10);
-        vid_text(12, 23, 0x1F, "10 \x5D\x5E\x5F");
-        vid_tile(10, 25, 0x1F, 0x14);
-        vid_text(12, 25, 0x1F, "50 \x5D\x5E\x5F");
+    if (after(&state.intro.started, delay)) {
+        vid_tile(10, 24, 0x1F, 0x10);
+        vid_text(12, 24, 0x1F, "10 \x5D\x5E\x5F");
+        vid_tile(10, 26, 0x1F, 0x14);
+        vid_text(12, 26, 0x1F, "50 \x5D\x5E\x5F");
     }
 
     // blinking "press any key" text
     delay += 60;
-    if (since(&state.triggers.intro) > delay) {
-        if (since(&state.triggers.intro) & 0x20) {
-            vid_text(3, 30, 3, "                       ");
+    if (since(&state.intro.started) > delay) {
+        if (since(&state.intro.started) & 0x20) {
+            vid_text(3, 31, 3, "                       ");
         }
         else {
-            vid_text(3, 30, 3, "PRESS ANY KEY TO START!");
+            vid_text(3, 31, 3, "PRESS ANY KEY TO START!");
+        }
+    }
+
+    // the animated chase sequence
+    delay += 60;
+    if (after(&state.intro.started, delay)) {
+        start(&state.intro.chase);
+        int16_t x = 224;
+        spr_init(ACTOR_PACMAN, (sprite_t) { .x=x,    .y=156, });   // pacman
+        spr_init(ACTOR_BLINKY, (sprite_t) { .x=x+20, .y=156, });
+        spr_init(ACTOR_PLINKY, (sprite_t) { .x=x+36, .y=156, });
+        spr_init(ACTOR_INKY,   (sprite_t) { .x=x+52, .y=156, });
+        spr_init(ACTOR_CLYDE,  (sprite_t) { .x=x+68, .y=156, });
+    }
+    if (phase(&state.intro.chase, 1, 200)) {
+        for (int i = 0; i < 5; i++) {
+            spr_actor_anim(i, DIR_LEFT);
+            state.gfx.sprite[i].x--;
         }
     }
 
     // if a key is pressed, advance to gameloop state
     if (state.input.any) {
         input_disable();
-        start(&state.triggers.gameloop);
+        start(&state.game.started);
     }
 }
 
 /*== HISCORE GAMESTATE CODE ==================================================*/
 static void hiscore_tick(void) {
-    if (now(&state.triggers.hiscore)) {
+    if (now(&state.hiscore.started)) {
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(7, 16, 0xF, "HISCORE TODO!");
     }
     if (state.input.any) {
         input_disable();
-        start(&state.triggers.intro);
+        start(&state.intro.started);
     }
 }
 
 /*== GAMELOOP GAMESTATE CODE =================================================*/
 static void gameloop_tick(void) {
-    if (now(&state.triggers.gameloop)) {
+    if (now(&state.game.started)) {
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(7, 16, 0xF, "GAMELOOP TODO!");
     }
     if (state.input.any) {
         input_disable();
-        start(&state.triggers.hiscore);
+        start(&state.hiscore.started);
     }
 }
 
@@ -442,6 +557,9 @@ static inline void gfx_decode_sprite(uint8_t sprite_code) {
 }
 
 static void gfx_init(void) {
+
+    // clear sprites
+    spr_clear();
 
     // pass action for clearing the background to black
     state.gfx.pass_action = (sg_pass_action) {
@@ -589,8 +707,8 @@ static void gfx_init(void) {
     });
 }
 
-static inline void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code) {
-    gfx_vertex_t* vtx = &state.gfx.vertices[state.gfx.num_vertices++];
+static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code) {
+    vertex_t* vtx = &state.gfx.vertices[state.gfx.num_vertices++];
     vtx->x = x;
     vtx->y = y;
     vtx->u = u;
@@ -598,51 +716,90 @@ static inline void gfx_add_vertex(float x, float y, float u, float v, uint8_t co
     vtx->attr = color_code;
 }
 
-static inline void gfx_add_tile_vertices(uint32_t x, uint32_t y, uint8_t tile_code, uint8_t color_code) {
+static void gfx_add_tile_vertices(void) {
     const float dx = 1.0f / DISPLAY_TILES_X;
     const float dy = 1.0f / DISPLAY_TILES_Y;
-    const float x0 = x * dx;
-    const float x1 = x0 + dx;
-    const float y0 = y * dy;
-    const float y1 = y0 + dy;
+    const float du = (float)TILE_WIDTH / TILE_TEXTURE_WIDTH;
+    const float dv = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
+    for (uint32_t ty = 0; ty < DISPLAY_TILES_Y; ty++) {
+        for (uint32_t tx = 0; tx < DISPLAY_TILES_X; tx++) {
+            const uint8_t tile_code = state.gfx.video_ram[ty][tx];
+            const uint8_t color_code = state.gfx.color_ram[ty][tx] & 0x1F;
 
-    float du = (float)TILE_WIDTH / TILE_TEXTURE_WIDTH;
-    float dv = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
+            const float x0 = tx * dx;
+            const float x1 = x0 + dx;
+            const float y0 = ty * dy;
+            const float y1 = y0 + dy;
+            const float u0 = tile_code * du;
+            const float u1 = u0 + du;
+            const float v0 = 0.0f;
+            const float v1 = v0 + dv;
+            /*
+                x0,y0
+                +-----+
+                | *   |
+                |   * |
+                +-----+
+                      x1,y1
+            */
+            gfx_add_vertex(x0, y0, u0, v0, color_code);
+            gfx_add_vertex(x1, y0, u1, v0, color_code);
+            gfx_add_vertex(x1, y1, u1, v1, color_code);
+            gfx_add_vertex(x0, y0, u0, v0, color_code);
+            gfx_add_vertex(x1, y1, u1, v1, color_code);
+            gfx_add_vertex(x0, y1, u0, v1, color_code);
+        }
+    }
+}
 
-    float u0 = tile_code * du;
-    float u1 = u0 + du;
-    float v0 = 0.0f;
-    float v1 = v0 + dv;
-
-    /*
-        x0,y0
-        +-----+
-        | *   |
-        |   * |
-        +-----+
-              x1,y1
-    */
-    gfx_add_vertex(x0, y0, u0, v0, color_code);
-    gfx_add_vertex(x1, y0, u1, v0, color_code);
-    gfx_add_vertex(x1, y1, u1, v1, color_code);
-    gfx_add_vertex(x0, y0, u0, v0, color_code);
-    gfx_add_vertex(x1, y1, u1, v1, color_code);
-    gfx_add_vertex(x0, y1, u0, v1, color_code);
+static void gfx_add_sprite_vertices(void) {
+    const float dx = 1.0f / DISPLAY_PIXELS_X;
+    const float dy = 1.0f / DISPLAY_PIXELS_Y;
+    const float du = (float)SPRITE_WIDTH / TILE_TEXTURE_WIDTH;
+    const float dv = (float)SPRITE_HEIGHT / TILE_TEXTURE_HEIGHT;
+    for (int i = 0; i < NUM_SPRITES; i++) {
+        const sprite_t* spr = &state.gfx.sprite[i];
+        if (spr->enabled) {
+            float x0, x1, y0, y1, u0, u1, v0, v1;
+            if (spr->flipx) {
+                x1 = spr->x * dx;
+                x0 = x1 + dx * SPRITE_WIDTH;
+            }
+            else {
+                x0 = spr->x * dx;
+                x1 = x0 + dx * SPRITE_WIDTH;
+            }
+            if (spr->flipy) {
+                y1 = spr->y * dy;
+                y0 = y1 + dy * SPRITE_HEIGHT;
+            }
+            else {
+                y0 = spr->y * dy;
+                y1 = y0 + dy * SPRITE_HEIGHT;
+            }
+            u0 = spr->tile * du;
+            u1 = u0 + du;
+            v0 = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
+            v1 = v0 + dv;
+            const uint8_t color = spr->color;
+            gfx_add_vertex(x0, y0, u0, v0, color);
+            gfx_add_vertex(x1, y0, u1, v0, color);
+            gfx_add_vertex(x1, y1, u1, v1, color);
+            gfx_add_vertex(x0, y0, u0, v0, color);
+            gfx_add_vertex(x1, y1, u1, v1, color);
+            gfx_add_vertex(x0, y1, u0, v1, color);
+        }
+    }
 }
 
 static void gfx_draw(void) {
 
     // update the playfield and sprite vertex buffer
     state.gfx.num_vertices = 0;
-    for (uint32_t y = 0; y < DISPLAY_TILES_Y; y++) {
-        for (uint32_t x = 0; x < DISPLAY_TILES_X; x++) {
-            uint8_t tile_code = state.gfx.video_ram[y][x];
-            uint8_t color_code = state.gfx.color_ram[y][x] & 0x1F;
-            gfx_add_tile_vertices(x, y, tile_code, color_code);
-        }
-    }
+    gfx_add_tile_vertices();
+    gfx_add_sprite_vertices();
     assert(state.gfx.num_vertices <= MAX_VERTICES);
-    sg_update_buffer(state.gfx.vbuf, &state.gfx.vertices, state.gfx.num_vertices * sizeof(gfx_vertex_t));
+    sg_update_buffer(state.gfx.vbuf, &state.gfx.vertices, state.gfx.num_vertices * sizeof(vertex_t));
 
     // render everything in a sokol-gfx pass
     const int canvas_width = sapp_width();

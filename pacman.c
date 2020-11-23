@@ -234,14 +234,14 @@ static void never(trigger_t* t) {
 }
 
 // check if a trigger is triggered
-static bool now(const trigger_t* t) {
-    return t->tick == state.tick;
+static bool now(trigger_t t) {
+    return t.tick == state.tick;
 }
 
 // return the number of ticks since trigger was triggered
-static uint32_t since(const trigger_t* t) {
-    if (state.tick > t->tick) {
-        return state.tick - t->tick;
+static uint32_t since(trigger_t t) {
+    if (state.tick > t.tick) {
+        return state.tick - t.tick;
     }
     else {
         return 0;
@@ -249,14 +249,14 @@ static uint32_t since(const trigger_t* t) {
 }
 
 // check if trigger is between begin and end tick
-static bool phase(const trigger_t* t, uint32_t begin, uint32_t end) {
+static bool phase(trigger_t t, uint32_t begin, uint32_t end) {
     assert((begin > 0) && (begin < end));
     uint32_t ticks = since(t);
     return (ticks >= begin) && (ticks < end);
 }
 
 // check if trigger was triggered N ticks ago
-static bool after(const trigger_t* t, uint32_t ticks) {
+static bool after(trigger_t t, uint32_t ticks) {
     return since(t) == ticks;
 }
 
@@ -356,13 +356,13 @@ static void game_tick(void) {
     state.tick++;
 
     // check for game state change
-    if (now(&state.intro.started)) {
+    if (now(state.intro.started)) {
         state.gamestate = GAMESTATE_INTRO;
     }
-    if (now(&state.game.started)) {
+    if (now(state.game.started)) {
         state.gamestate = GAMESTATE_GAMELOOP;
     }
-    if (now(&state.hiscore.started)) {
+    if (now(state.hiscore.started)) {
         state.gamestate = GAMESTATE_HISCORE;
     }
 
@@ -385,7 +385,7 @@ static void game_tick(void) {
 static void intro_tick(void) {
 
     // on intro-state enter, enable input and draw any initial text
-    if (now(&state.intro.started)) {
+    if (now(state.intro.started)) {
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(3, 0,  0xF, "1UP   HIGH SCORE   2UP");
@@ -405,19 +405,19 @@ static void intro_tick(void) {
         const uint8_t y = 3*i + 6;
         // 2*3 ghost image created from tiles (no sprite!)
         delay += 30;
-        if (after(&state.intro.started, delay)) {
+        if (after(state.intro.started, delay)) {
             vid_tile(4, y+0, color, 0xB0); vid_tile(5, y+0, color, 0xB1);
             vid_tile(4, y+1, color, 0xB2); vid_tile(5, y+1, color, 0xB3);
             vid_tile(4, y+2, color, 0xB4); vid_tile(5, y+2, color, 0xB5);
         }
         // after 1 second, the name of the ghost
         delay += 60;
-        if (after(&state.intro.started, delay)) {
+        if (after(state.intro.started, delay)) {
             vid_text(7, y+1, color, names[i]);
         }
         // after 0.5 seconds, the nickname of the ghost
         delay += 30;
-        if (after(&state.intro.started, delay)) {
+        if (after(state.intro.started, delay)) {
             vid_text(17, y+1, color, nicknames[i]);
         }
     }
@@ -425,7 +425,7 @@ static void intro_tick(void) {
     // . 10 PTS
     // O 50 PTS
     delay += 60;
-    if (after(&state.intro.started, delay)) {
+    if (after(state.intro.started, delay)) {
         vid_tile(10, 24, 0x1F, 0x10);
         vid_text(12, 24, 0x1F, "10 \x5D\x5E\x5F");
         vid_tile(10, 26, 0x1F, 0x14);
@@ -434,8 +434,8 @@ static void intro_tick(void) {
 
     // blinking "press any key" text
     delay += 60;
-    if (since(&state.intro.started) > delay) {
-        if (since(&state.intro.started) & 0x20) {
+    if (since(state.intro.started) > delay) {
+        if (since(state.intro.started) & 0x20) {
             vid_text(3, 31, 3, "                       ");
         }
         else {
@@ -445,7 +445,7 @@ static void intro_tick(void) {
 
     // the animated chase sequence
     delay += 60;
-    if (after(&state.intro.started, delay)) {
+    if (after(state.intro.started, delay)) {
         start(&state.intro.chase);
         int16_t x = 224;
         spr_init(ACTOR_PACMAN, (sprite_t) { .x=x,    .y=156, });   // pacman
@@ -454,7 +454,7 @@ static void intro_tick(void) {
         spr_init(ACTOR_INKY,   (sprite_t) { .x=x+52, .y=156, });
         spr_init(ACTOR_CLYDE,  (sprite_t) { .x=x+68, .y=156, });
     }
-    if (phase(&state.intro.chase, 1, 200)) {
+    if (phase(state.intro.chase, 1, 200)) {
         for (int i = 0; i < 5; i++) {
             spr_actor_anim(i, DIR_LEFT);
             state.gfx.sprite[i].x--;
@@ -470,7 +470,7 @@ static void intro_tick(void) {
 
 /*== HISCORE GAMESTATE CODE ==================================================*/
 static void hiscore_tick(void) {
-    if (now(&state.hiscore.started)) {
+    if (now(state.hiscore.started)) {
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(7, 16, 0xF, "HISCORE TODO!");
@@ -483,7 +483,7 @@ static void hiscore_tick(void) {
 
 /*== GAMELOOP GAMESTATE CODE =================================================*/
 static void gameloop_tick(void) {
-    if (now(&state.game.started)) {
+    if (now(state.game.started)) {
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(7, 16, 0xF, "GAMELOOP TODO!");

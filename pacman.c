@@ -23,6 +23,11 @@
 #define TILE_TEXTURE_HEIGHT (24)
 #define MAX_VERTICES    (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + 1) * 6)
 
+// some common tile numbers
+#define TILE_DOT        (0x10)
+#define TILE_PILL       (0x14)
+#define TILE_GHOST      (0xB0)
+
 typedef enum {
     GAMESTATE_INTRO,
     GAMESTATE_GAMELOOP,
@@ -37,15 +42,6 @@ typedef enum {
     DIR_UP,     // 11
     NUM_DIRS
 } dir_t;
-
-typedef enum {
-    ACTOR_BLINKY,
-    ACTOR_PLINKY,
-    ACTOR_INKY,
-    ACTOR_CLYDE,
-    ACTOR_PACMAN,
-    NUM_ACTORS,
-} actor_t;
 
 // a trigger starts an action when a specific game tick is reached
 typedef struct {
@@ -319,9 +315,9 @@ static void spr_init(int index, sprite_t sprite) {
     state.gfx.sprite[index].enabled = true;
 }
 
-// set sprite appearance to animated actor
-static void spr_actor_anim(actor_t actor, dir_t dir) {
-    assert((actor >= 0) && (actor < NUM_ACTORS));
+// set sprite to animated pacman
+static void spr_anim_pacman(int index, dir_t dir) {
+    assert((index >= 0) && (index < NUM_SPRITES));
     assert((dir >= 0) && (dir < NUM_DIRS));
 
     // animation frames for horizontal and vertical movement
@@ -329,26 +325,30 @@ static void spr_actor_anim(actor_t actor, dir_t dir) {
         { 44, 46, 48, 46 }, // horizontal (needs flipx)
         { 45, 47, 48, 47 }  // vertical (needs flipy)
     };
+
+    sprite_t* spr = &state.gfx.sprite[index];
+    uint32_t phase = (state.tick / 4) % 4;
+    spr->tile  = pacman_tiles[dir & 1][phase];
+    spr->flipx = (dir == DIR_LEFT);
+    spr->flipy = (dir == DIR_UP);
+}
+
+// set sprite to animated ghost
+static void spr_anim_ghost(int index, dir_t dir) {
+    assert((index >= 0) && (index < NUM_SPRITES));
+    assert((dir >= 0) && (dir < NUM_DIRS));
+
     static const uint8_t ghost_tiles[4][4]  = {
         { 32, 33, 32, 33 }, // right
         { 34, 35, 34, 35 }, // down
         { 36, 37, 36, 37 }, // left
         { 38, 39, 38, 39 }, // up
     };
-
-    sprite_t* spr = &state.gfx.sprite[actor];
-    spr->color = actor * 2 + 1;
+    sprite_t* spr = &state.gfx.sprite[index];
     uint32_t phase = (state.tick / 4) % 4;
-    if (actor == ACTOR_PACMAN) {
-        spr->tile  = pacman_tiles[dir & 1][phase];
-        spr->flipx = (dir == DIR_LEFT);
-        spr->flipy = (dir == DIR_UP);
-    }
-    else {
-        spr->tile = ghost_tiles[dir][phase];
-        spr->flipx = false;
-        spr->flipy = false;
-    }
+    spr->tile = ghost_tiles[dir][phase];
+    spr->flipx = false;
+    spr->flipy = false;
 }
 
 /*== TOP-LEVEL GAME CODE =====================================================*/
@@ -406,9 +406,9 @@ static void intro_tick(void) {
         // 2*3 ghost image created from tiles (no sprite!)
         delay += 30;
         if (after(state.intro.started, delay)) {
-            vid_tile(4, y+0, color, 0xB0); vid_tile(5, y+0, color, 0xB1);
-            vid_tile(4, y+1, color, 0xB2); vid_tile(5, y+1, color, 0xB3);
-            vid_tile(4, y+2, color, 0xB4); vid_tile(5, y+2, color, 0xB5);
+            vid_tile(4, y+0, color, TILE_GHOST+0); vid_tile(5, y+0, color, TILE_GHOST+1);
+            vid_tile(4, y+1, color, TILE_GHOST+2); vid_tile(5, y+1, color, TILE_GHOST+3);
+            vid_tile(4, y+2, color, TILE_GHOST+4); vid_tile(5, y+2, color, TILE_GHOST+5);
         }
         // after 1 second, the name of the ghost
         delay += 60;
@@ -426,9 +426,9 @@ static void intro_tick(void) {
     // O 50 PTS
     delay += 60;
     if (after(state.intro.started, delay)) {
-        vid_tile(10, 24, 0x1F, 0x10);
+        vid_tile(10, 24, 0x1F, TILE_DOT);
         vid_text(12, 24, 0x1F, "10 \x5D\x5E\x5F");
-        vid_tile(10, 26, 0x1F, 0x14);
+        vid_tile(10, 26, 0x1F, TILE_PILL);
         vid_text(12, 26, 0x1F, "50 \x5D\x5E\x5F");
     }
 
@@ -447,16 +447,18 @@ static void intro_tick(void) {
     delay += 60;
     if (after(state.intro.started, delay)) {
         start(&state.intro.chase);
+        vid_tile(4, 20, 0x1F, TILE_PILL);
         int16_t x = 224;
-        spr_init(ACTOR_PACMAN, (sprite_t) { .x=x,    .y=156, });   // pacman
-        spr_init(ACTOR_BLINKY, (sprite_t) { .x=x+20, .y=156, });
-        spr_init(ACTOR_PLINKY, (sprite_t) { .x=x+36, .y=156, });
-        spr_init(ACTOR_INKY,   (sprite_t) { .x=x+52, .y=156, });
-        spr_init(ACTOR_CLYDE,  (sprite_t) { .x=x+68, .y=156, });
+        spr_init(0, (sprite_t) { .x=x,    .y=156, .color = 9 });
+        spr_init(1, (sprite_t) { .x=x+20, .y=156, .color = 1 });
+        spr_init(2, (sprite_t) { .x=x+36, .y=156, .color = 3 });
+        spr_init(3, (sprite_t) { .x=x+52, .y=156, .color = 5 });
+        spr_init(4, (sprite_t) { .x=x+68, .y=156, .color = 7 });
     }
     if (phase(state.intro.chase, 1, 200)) {
         for (int i = 0; i < 5; i++) {
-            spr_actor_anim(i, DIR_LEFT);
+            if (i == 0) { spr_anim_pacman(i, DIR_LEFT); }
+            else        { spr_anim_ghost(i, DIR_LEFT); }
             state.gfx.sprite[i].x--;
         }
     }
@@ -642,7 +644,7 @@ static void gfx_init(void) {
         .blend = {
             .enabled = true,
             .src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
-            .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_DST_ALPHA,
+            .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
         }
     });
 
@@ -691,6 +693,10 @@ static void gfx_init(void) {
     uint32_t color_palette[256];
     for (int i = 0; i < 256; i++) {
         color_palette[i] = hw_colors[rom_palette[i] & 0xF];
+        // first color in each color block is transparent
+        if ((i & 3) == 0) {
+            color_palette[i] &= 0x00FFFFFF;
+        }
     }
     state.gfx.palette_img = sg_make_image(&(sg_image_desc){
         .width = 256,

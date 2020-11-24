@@ -36,3 +36,8 @@ endif()
 target_link_libraries(pacman sokol)
 # this hack removes the xxx-CMakeForceLinker.cxx dummy file
 set_target_properties(pacman PROPERTIES LINKER_LANGUAGE C)
+# explicitly strip dead code
+if (CMAKE_C_COMPILER_ID MATCHES "Clang")
+    message("Enable -dead_strip")
+    target_link_options(pacman PRIVATE LINKER:-dead_strip)
+endif()

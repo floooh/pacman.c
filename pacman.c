@@ -22,11 +22,20 @@
 #define TILE_TEXTURE_WIDTH  (2048)
 #define TILE_TEXTURE_HEIGHT (24)
 #define MAX_VERTICES    (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + 1) * 6)
+#define FADE_TICKS      (30)
 
 // some common tile numbers
 #define TILE_DOT        (0x10)
 #define TILE_PILL       (0x14)
 #define TILE_GHOST      (0xB0)
+
+// some common color codes
+#define COLOR_PACMAN        (9)
+#define COLOR_BLINKY        (1)
+#define COLOR_PINKY         (3)
+#define COLOR_INKY          (5)
+#define COLOR_CLYDE         (7)
+#define COLOR_FRIGHTENED    (3)
 
 typedef enum {
     GAMESTATE_INTRO,
@@ -97,12 +106,19 @@ static struct {
 
     // the gfx subsystem implements a simple tile+sprite renderer
     struct {
+        // fade-in/out triggers
+        trigger_t fadein;
+        trigger_t fadeout;
+
         // the 36x28 tile framebuffer
         uint8_t video_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // tile codes
         uint8_t color_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // color codes
 
         // up to 6 sprites
         sprite_t sprite[NUM_SPRITES];
+
+        // current fade value (0: no fade, 255: fully opaque)
+        uint8_t fade;
 
         // sokol-gfx resources
         sg_pass_action pass_action;
@@ -137,6 +153,7 @@ static void input_enable(void);
 static void input_disable(void);
 
 static void gfx_init(void);
+static void gfx_fade(void);
 static void gfx_draw(void);
 
 static uint8_t rom_tiles[4096];
@@ -220,12 +237,12 @@ static void start(trigger_t* t) {
 }
 
 // activate trigger in any future tick
-static void start_in(trigger_t* t, uint32_t ticks) {
+static void start_after(trigger_t* t, uint32_t ticks) {
     t->tick = state.tick + ticks;
 }
 
 // deactivate a trigger
-static void never(trigger_t* t) {
+static void disable(trigger_t* t) {
     t->tick = 0xFFFFFFFF;
 }
 
@@ -236,17 +253,17 @@ static bool now(trigger_t t) {
 
 // return the number of ticks since trigger was triggered
 static uint32_t since(trigger_t t) {
-    if (state.tick > t.tick) {
+    if (state.tick >= t.tick) {
         return state.tick - t.tick;
     }
     else {
-        return 0;
+        return 0xFFFFFFFF;
     }
 }
 
 // check if trigger is between begin and end tick
 static bool phase(trigger_t t, uint32_t begin, uint32_t end) {
-    assert((begin > 0) && (begin < end));
+    assert((begin >= 0) && (begin < end));
     uint32_t ticks = since(t);
     return (ticks >= begin) && (ticks < end);
 }
@@ -319,16 +336,15 @@ static void spr_init(int index, sprite_t sprite) {
 static void spr_anim_pacman(int index, dir_t dir) {
     assert((index >= 0) && (index < NUM_SPRITES));
     assert((dir >= 0) && (dir < NUM_DIRS));
-
     // animation frames for horizontal and vertical movement
-    static const uint8_t pacman_tiles[2][4] = {
+    static const uint8_t tiles[2][4] = {
         { 44, 46, 48, 46 }, // horizontal (needs flipx)
         { 45, 47, 48, 47 }  // vertical (needs flipy)
     };
 
     sprite_t* spr = &state.gfx.sprite[index];
-    uint32_t phase = (state.tick / 4) % 4;
-    spr->tile  = pacman_tiles[dir & 1][phase];
+    uint32_t phase = (state.tick / 4) & 3;
+    spr->tile  = tiles[dir & 1][phase];
     spr->flipx = (dir == DIR_LEFT);
     spr->flipy = (dir == DIR_UP);
 }
@@ -337,16 +353,26 @@ static void spr_anim_pacman(int index, dir_t dir) {
 static void spr_anim_ghost(int index, dir_t dir) {
     assert((index >= 0) && (index < NUM_SPRITES));
     assert((dir >= 0) && (dir < NUM_DIRS));
-
-    static const uint8_t ghost_tiles[4][4]  = {
-        { 32, 33, 32, 33 }, // right
-        { 34, 35, 34, 35 }, // down
-        { 36, 37, 36, 37 }, // left
-        { 38, 39, 38, 39 }, // up
+    static const uint8_t tiles[4][2]  = {
+        { 32, 33 }, // right
+        { 34, 35 }, // down
+        { 36, 37 }, // left
+        { 38, 39 }, // up
     };
+    uint32_t phase = (state.tick / 4) & 1;
     sprite_t* spr = &state.gfx.sprite[index];
-    uint32_t phase = (state.tick / 4) % 4;
-    spr->tile = ghost_tiles[dir][phase];
+    spr->tile = tiles[dir][phase];
+    spr->flipx = false;
+    spr->flipy = false;
+}
+
+// set sprite to animated, frightened ghost
+static void spr_anim_ghost_frightened(int index) {
+    assert((index >= 0) && (index < NUM_SPRITES));
+    static const uint8_t tiles[4] = { 28, 29 };
+    uint32_t phase = (state.tick / 4) & 1;
+    sprite_t* spr = &state.gfx.sprite[index];
+    spr->tile = tiles[phase];
     spr->flipx = false;
     spr->flipy = false;
 }
@@ -378,6 +404,9 @@ static void game_tick(void) {
             hiscore_tick();
             break;
     }
+
+    // handle fadein/fadeout
+    gfx_fade();
 }
 
 /*== INTRO GAMESTATE CODE ====================================================*/
@@ -386,6 +415,7 @@ static void intro_tick(void) {
 
     // on intro-state enter, enable input and draw any initial text
     if (now(state.intro.started)) {
+        start(&state.gfx.fadein);
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(3, 0,  0xF, "1UP   HIGH SCORE   2UP");
@@ -393,7 +423,7 @@ static void intro_tick(void) {
         vid_text(7, 5,  0xF, "CHARACTER / NICKNAME");
         vid_text(3, 35, 0xF, "CREDIT  0");
         spr_clear();
-        never(&state.intro.chase);
+        disable(&state.intro.chase);
     }
 
     // draw the animated 'ghost image.. name.. nickname' lines
@@ -443,56 +473,79 @@ static void intro_tick(void) {
         }
     }
 
+    // FIXME: rewrite this with "gameplay code"
     // the animated chase sequence
     delay += 60;
     if (after(state.intro.started, delay)) {
         start(&state.intro.chase);
         vid_tile(4, 20, 0x1F, TILE_PILL);
         int16_t x = 224;
-        spr_init(0, (sprite_t) { .x=x,    .y=156, .color = 9 });
-        spr_init(1, (sprite_t) { .x=x+20, .y=156, .color = 1 });
-        spr_init(2, (sprite_t) { .x=x+36, .y=156, .color = 3 });
-        spr_init(3, (sprite_t) { .x=x+52, .y=156, .color = 5 });
-        spr_init(4, (sprite_t) { .x=x+68, .y=156, .color = 7 });
+        spr_init(0, (sprite_t) { .x=x+20, .y=156, .color = COLOR_BLINKY });
+        spr_init(1, (sprite_t) { .x=x+36, .y=156, .color = COLOR_PINKY });
+        spr_init(2, (sprite_t) { .x=x+52, .y=156, .color = COLOR_INKY });
+        spr_init(3, (sprite_t) { .x=x+68, .y=156, .color = COLOR_CLYDE });
+        spr_init(4, (sprite_t) { .x=x,    .y=156, .color = COLOR_PACMAN });
     }
+    // ghosts are chasing pacman...
     if (phase(state.intro.chase, 1, 200)) {
         for (int i = 0; i < 5; i++) {
-            if (i == 0) { spr_anim_pacman(i, DIR_LEFT); }
+            if (i == 4) { spr_anim_pacman(i, DIR_LEFT); }
             else        { spr_anim_ghost(i, DIR_LEFT); }
             state.gfx.sprite[i].x--;
+        }
+    }
+    // pacman is chasing and eating ghosts
+    if (phase(state.intro.chase, 210, 500)) {
+        for (int i = 0; i < 5; i++) {
+            if (i == 4) {
+                spr_anim_pacman(i, DIR_RIGHT);
+                state.gfx.sprite[i].x++;
+            }
+            else {
+                spr_anim_ghost_frightened(i);
+                state.gfx.sprite[i].color = COLOR_FRIGHTENED;
+                if (state.tick & 1) {
+                    state.gfx.sprite[i].x++;
+                }
+            }
         }
     }
 
     // if a key is pressed, advance to gameloop state
     if (state.input.any) {
         input_disable();
-        start(&state.game.started);
+        start(&state.gfx.fadeout);
+        start_after(&state.game.started, FADE_TICKS);
     }
 }
 
 /*== HISCORE GAMESTATE CODE ==================================================*/
 static void hiscore_tick(void) {
     if (now(state.hiscore.started)) {
+        start(&state.gfx.fadein);
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(7, 16, 0xF, "HISCORE TODO!");
     }
     if (state.input.any) {
         input_disable();
-        start(&state.intro.started);
+        start(&state.gfx.fadeout);
+        start_after(&state.intro.started, FADE_TICKS);
     }
 }
 
 /*== GAMELOOP GAMESTATE CODE =================================================*/
 static void gameloop_tick(void) {
     if (now(state.game.started)) {
+        start(&state.gfx.fadein);
         input_enable();
         vid_clear(0x40, 0x0);
         vid_text(7, 16, 0xF, "GAMELOOP TODO!");
     }
     if (state.input.any) {
         input_disable();
-        start(&state.hiscore.started);
+        start(&state.gfx.fadeout);
+        start_after(&state.hiscore.started, FADE_TICKS);
     }
 }
 
@@ -560,7 +613,9 @@ static inline void gfx_decode_sprite(uint8_t sprite_code) {
 
 static void gfx_init(void) {
 
-    // clear sprites
+    disable(&state.gfx.fadein);
+    disable(&state.gfx.fadeout);
+    state.gfx.fade = 0xFF;
     spr_clear();
 
     // pass action for clearing the background to black
@@ -616,7 +671,7 @@ static void gfx_init(void) {
                 "  float color_code = in.data.x;\n" // (0..31) / 255
                 "  float tile_color = tile_tex.sample(tile_smp, in.uv).x;\n" // (0..3) / 255
                 "  float2 pal_uv = float2(color_code * 4 + tile_color, 0);\n"
-                "  float4 color = pal_tex.sample(pal_smp, pal_uv);\n"
+                "  float4 color = pal_tex.sample(pal_smp, pal_uv) * float4(1, 1, 1, in.data.y);\n"
                 "  return color;\n"
                 "}\n";
             break;
@@ -654,6 +709,12 @@ static void gfx_init(void) {
     }
     for (uint32_t sprite_code = 0; sprite_code < 64; sprite_code++) {
         gfx_decode_sprite(sprite_code);
+    }
+    // write a special opaque 16x16 block which will be used for the fade-effect
+    for (uint32_t y = TILE_HEIGHT; y < TILE_TEXTURE_HEIGHT; y++) {
+        for (uint32_t x = 64*SPRITE_WIDTH; x < 65*SPRITE_WIDTH; x++) {
+            state.gfx.tile_pixels[y][x] = 1;
+        }
     }
     state.gfx.tile_img = sg_make_image(&(sg_image_desc){
         .width  = TILE_TEXTURE_WIDTH,
@@ -713,13 +774,13 @@ static void gfx_init(void) {
     });
 }
 
-static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code) {
+static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code, uint8_t fade) {
     vertex_t* vtx = &state.gfx.vertices[state.gfx.num_vertices++];
     vtx->x = x;
     vtx->y = y;
     vtx->u = u;
     vtx->v = v;
-    vtx->attr = color_code;
+    vtx->attr = (fade<<8) | color_code;
 }
 
 static void gfx_add_tile_vertices(void) {
@@ -748,12 +809,12 @@ static void gfx_add_tile_vertices(void) {
                 +-----+
                       x1,y1
             */
-            gfx_add_vertex(x0, y0, u0, v0, color_code);
-            gfx_add_vertex(x1, y0, u1, v0, color_code);
-            gfx_add_vertex(x1, y1, u1, v1, color_code);
-            gfx_add_vertex(x0, y0, u0, v0, color_code);
-            gfx_add_vertex(x1, y1, u1, v1, color_code);
-            gfx_add_vertex(x0, y1, u0, v1, color_code);
+            gfx_add_vertex(x0, y0, u0, v0, color_code, 0xFF);
+            gfx_add_vertex(x1, y0, u1, v0, color_code, 0xFF);
+            gfx_add_vertex(x1, y1, u1, v1, color_code, 0xFF);
+            gfx_add_vertex(x0, y0, u0, v0, color_code, 0xFF);
+            gfx_add_vertex(x1, y1, u1, v1, color_code, 0xFF);
+            gfx_add_vertex(x0, y1, u0, v1, color_code, 0xFF);
         }
     }
 }
@@ -766,7 +827,7 @@ static void gfx_add_sprite_vertices(void) {
     for (int i = 0; i < NUM_SPRITES; i++) {
         const sprite_t* spr = &state.gfx.sprite[i];
         if (spr->enabled) {
-            float x0, x1, y0, y1, u0, u1, v0, v1;
+            float x0, x1, y0, y1;
             if (spr->flipx) {
                 x1 = spr->x * dx;
                 x0 = x1 + dx * SPRITE_WIDTH;
@@ -783,19 +844,37 @@ static void gfx_add_sprite_vertices(void) {
                 y0 = spr->y * dy;
                 y1 = y0 + dy * SPRITE_HEIGHT;
             }
-            u0 = spr->tile * du;
-            u1 = u0 + du;
-            v0 = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
-            v1 = v0 + dv;
+            const float u0 = spr->tile * du;
+            const float u1 = u0 + du;
+            const float v0 = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
+            const float v1 = v0 + dv;
             const uint8_t color = spr->color;
-            gfx_add_vertex(x0, y0, u0, v0, color);
-            gfx_add_vertex(x1, y0, u1, v0, color);
-            gfx_add_vertex(x1, y1, u1, v1, color);
-            gfx_add_vertex(x0, y0, u0, v0, color);
-            gfx_add_vertex(x1, y1, u1, v1, color);
-            gfx_add_vertex(x0, y1, u0, v1, color);
+            gfx_add_vertex(x0, y0, u0, v0, color, 0xFF);
+            gfx_add_vertex(x1, y0, u1, v0, color, 0xFF);
+            gfx_add_vertex(x1, y1, u1, v1, color, 0xFF);
+            gfx_add_vertex(x0, y0, u0, v0, color, 0xFF);
+            gfx_add_vertex(x1, y1, u1, v1, color, 0xFF);
+            gfx_add_vertex(x0, y1, u0, v1, color, 0xFF);
         }
     }
+}
+
+static void gfx_add_fade_vertices(void) {
+    // sprite tile 64 is a special 16x16 opaque block
+    const float du = (float)SPRITE_WIDTH / TILE_TEXTURE_WIDTH;
+    const float dv = (float)SPRITE_HEIGHT / TILE_TEXTURE_HEIGHT;
+    const float u0 = 64 * du;
+    const float u1 = u0 + du;
+    const float v0 = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
+    const float v1 = v0 + dv;
+
+    const uint8_t fade = state.gfx.fade;
+    gfx_add_vertex(0.0f, 0.0f, u0, v0, 0, fade);
+    gfx_add_vertex(1.0f, 0.0f, u1, v0, 0, fade);
+    gfx_add_vertex(1.0f, 1.0f, u1, v1, 0, fade);
+    gfx_add_vertex(0.0f, 0.0f, u0, v0, 0, fade);
+    gfx_add_vertex(1.0f, 1.0f, u1, v1, 0, fade);
+    gfx_add_vertex(0.0f, 1.0f, u0, v1, 0, fade);
 }
 
 static void gfx_draw(void) {
@@ -804,6 +883,9 @@ static void gfx_draw(void) {
     state.gfx.num_vertices = 0;
     gfx_add_tile_vertices();
     gfx_add_sprite_vertices();
+    if (state.gfx.fade > 0) {
+        gfx_add_fade_vertices();
+    }
     assert(state.gfx.num_vertices <= MAX_VERTICES);
     sg_update_buffer(state.gfx.vbuf, &state.gfx.vertices, state.gfx.num_vertices * sizeof(vertex_t));
 
@@ -839,6 +921,24 @@ static void gfx_draw(void) {
     sg_draw(0, state.gfx.num_vertices, 1);
     sg_end_pass();
     sg_commit();
+}
+
+// handle fadein/fadeout
+static void gfx_fade(void) {
+    if (phase(state.gfx.fadein, 0, FADE_TICKS)) {
+        float t = (float)since(state.gfx.fadein) / FADE_TICKS;
+        state.gfx.fade = 255 * (1.0f - t);
+    }
+    if (after(state.gfx.fadein, FADE_TICKS)) {
+        state.gfx.fade = 0;
+    }
+    if (phase(state.gfx.fadeout, 0, FADE_TICKS)) {
+        float t = (float)since(state.gfx.fadeout) / FADE_TICKS;
+        state.gfx.fade = 255 * t;
+    }
+    if (after(state.gfx.fadeout, FADE_TICKS)) {
+        state.gfx.fade = 255;
+    }
 }
 
 /*== EMBEDDED DATA ===========================================================*/

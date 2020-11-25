@@ -39,7 +39,7 @@
 
 typedef enum {
     GAMESTATE_INTRO,
-    GAMESTATE_GAMELOOP,
+    GAMESTATE_GAME,
     GAMESTATE_HISCORE,
 } gamestate_t;
 
@@ -89,9 +89,10 @@ static struct {
         trigger_t started;
     } hiscore;
 
-    // gameloop state
+    // game state
     struct {
         trigger_t started;
+        trigger_t round_started;
     } game;
 
     // the current input state
@@ -144,9 +145,9 @@ static void input(const sapp_event*);
 
 static void start(trigger_t* t);
 
-static void game_tick(void);
+static void pacman_tick(void);
 static void intro_tick(void);
-static void gameloop_tick(void);
+static void game_tick(void);
 static void hiscore_tick(void);
 
 static void input_enable(void);
@@ -191,7 +192,7 @@ static void init(void) {
 
 static void frame(void) {
     // FIXME: decouple game_tick() from refresh rate
-    game_tick();
+    pacman_tick();
     gfx_draw();
 }
 
@@ -289,29 +290,55 @@ static void vid_clear(uint8_t tile_code, uint8_t color_code) {
     memset(&state.gfx.color_ram, color_code, sizeof(state.gfx.color_ram));
 }
 
+// put a tile into the tile buffer (
+static void vid_tile(uint8_t x, uint8_t y, uint8_t tile_code) {
+    assert((x < DISPLAY_TILES_X) && (y < DISPLAY_TILES_Y));
+    state.gfx.video_ram[y][x] = tile_code;
+}
+
 // put a colored tile into the tile buffer
-static void vid_tile(uint8_t x, uint8_t y, uint8_t color_code, uint8_t tile_code) {
+static void vid_color_tile(uint8_t x, uint8_t y, uint8_t color_code, uint8_t tile_code) {
     assert((x < DISPLAY_TILES_X) && (y < DISPLAY_TILES_Y));
     state.gfx.video_ram[y][x] = tile_code;
     state.gfx.color_ram[y][x] = color_code;
 }
 
+// translate ASCII char into "NAMCO char"
+static char conv_char(char c) {
+    switch (c) {
+        case ' ':   c = 64; break;
+        case '/':   c = 58; break;
+        case '-':   c = 59; break;
+        case '\"':  c = 38; break;
+        case '!':   c = 'Z'+1; break;
+        default: break;
+    }
+    return c;
+}
+
 // put colored text into the tile buffer
-static void vid_text(uint8_t x, uint8_t y, uint8_t color_code, const char* text) {
+static void vid_color_text(uint8_t x, uint8_t y, uint8_t color_code, const char* text) {
     assert((x < DISPLAY_TILES_X) && (y < DISPLAY_TILES_Y));
     uint8_t chr;
     while ((chr = (uint8_t) *text++)) {
         if (x < DISPLAY_TILES_X) {
-            switch (chr) {
-                case ' ':   chr = 64; break;
-                case '/':   chr = 58; break;
-                case '-':   chr = 59; break;
-                case '\"':  chr = 38; break;
-                case '!':   chr = 'Z'+1; break;
-                default: break;
-            }
-            state.gfx.video_ram[y][x] = chr;
+            state.gfx.video_ram[y][x] = conv_char(chr);
             state.gfx.color_ram[y][x] = color_code;
+            x++;
+        }
+        else {
+            break;
+        }
+    }
+}
+
+// put text without color into the tile buffer
+static void vid_text(uint8_t x, uint8_t y, const char* text) {
+    assert((x < DISPLAY_TILES_X) && (y < DISPLAY_TILES_Y));
+    uint8_t chr;
+    while ((chr = (uint8_t) *text++)) {
+        if (x < DISPLAY_TILES_X) {
+            state.gfx.video_ram[y][x] = conv_char(chr);
             x++;
         }
         else {
@@ -378,7 +405,7 @@ static void spr_anim_ghost_frightened(int index) {
 }
 
 /*== TOP-LEVEL GAME CODE =====================================================*/
-static void game_tick(void) {
+static void pacman_tick(void) {
     state.tick++;
 
     // check for game state change
@@ -386,7 +413,7 @@ static void game_tick(void) {
         state.gamestate = GAMESTATE_INTRO;
     }
     if (now(state.game.started)) {
-        state.gamestate = GAMESTATE_GAMELOOP;
+        state.gamestate = GAMESTATE_GAME;
     }
     if (now(state.hiscore.started)) {
         state.gamestate = GAMESTATE_HISCORE;
@@ -397,8 +424,8 @@ static void game_tick(void) {
         case GAMESTATE_INTRO:
             intro_tick();
             break;
-        case GAMESTATE_GAMELOOP:
-            gameloop_tick();
+        case GAMESTATE_GAME:
+            game_tick();
             break;
         case GAMESTATE_HISCORE:
             hiscore_tick();
@@ -417,11 +444,11 @@ static void intro_tick(void) {
     if (now(state.intro.started)) {
         start(&state.gfx.fadein);
         input_enable();
-        vid_clear(0x40, 0x0);
-        vid_text(3, 0,  0xF, "1UP   HIGH SCORE   2UP");
-        vid_text(5, 1,  0xF, "00");
-        vid_text(7, 5,  0xF, "CHARACTER / NICKNAME");
-        vid_text(3, 35, 0xF, "CREDIT  0");
+        vid_clear(0x40, 0xF);
+        vid_text(3, 0,  "1UP   HIGH SCORE   2UP");
+        vid_text(5, 1,  "00");
+        vid_text(7, 5,  "CHARACTER / NICKNAME");
+        vid_text(3, 35, "CREDIT  0");
         spr_clear();
         disable(&state.intro.chase);
     }
@@ -436,19 +463,19 @@ static void intro_tick(void) {
         // 2*3 ghost image created from tiles (no sprite!)
         delay += 30;
         if (after(state.intro.started, delay)) {
-            vid_tile(4, y+0, color, TILE_GHOST+0); vid_tile(5, y+0, color, TILE_GHOST+1);
-            vid_tile(4, y+1, color, TILE_GHOST+2); vid_tile(5, y+1, color, TILE_GHOST+3);
-            vid_tile(4, y+2, color, TILE_GHOST+4); vid_tile(5, y+2, color, TILE_GHOST+5);
+            vid_color_tile(4, y+0, color, TILE_GHOST+0); vid_color_tile(5, y+0, color, TILE_GHOST+1);
+            vid_color_tile(4, y+1, color, TILE_GHOST+2); vid_color_tile(5, y+1, color, TILE_GHOST+3);
+            vid_color_tile(4, y+2, color, TILE_GHOST+4); vid_color_tile(5, y+2, color, TILE_GHOST+5);
         }
         // after 1 second, the name of the ghost
         delay += 60;
         if (after(state.intro.started, delay)) {
-            vid_text(7, y+1, color, names[i]);
+            vid_color_text(7, y+1, color, names[i]);
         }
         // after 0.5 seconds, the nickname of the ghost
         delay += 30;
         if (after(state.intro.started, delay)) {
-            vid_text(17, y+1, color, nicknames[i]);
+            vid_color_text(17, y+1, color, nicknames[i]);
         }
     }
 
@@ -456,20 +483,20 @@ static void intro_tick(void) {
     // O 50 PTS
     delay += 60;
     if (after(state.intro.started, delay)) {
-        vid_tile(10, 24, 0x1F, TILE_DOT);
-        vid_text(12, 24, 0x1F, "10 \x5D\x5E\x5F");
-        vid_tile(10, 26, 0x1F, TILE_PILL);
-        vid_text(12, 26, 0x1F, "50 \x5D\x5E\x5F");
+        vid_color_tile(10, 24, 0x10, TILE_DOT);
+        vid_text(12, 24, "10 \x5D\x5E\x5F");
+        vid_color_tile(10, 26, 0x10, TILE_PILL);
+        vid_text(12, 26, "50 \x5D\x5E\x5F");
     }
 
     // blinking "press any key" text
     delay += 60;
     if (since(state.intro.started) > delay) {
         if (since(state.intro.started) & 0x20) {
-            vid_text(3, 31, 3, "                       ");
+            vid_color_text(3, 31, 3, "                       ");
         }
         else {
-            vid_text(3, 31, 3, "PRESS ANY KEY TO START!");
+            vid_color_text(3, 31, 3, "PRESS ANY KEY TO START!");
         }
     }
 
@@ -478,7 +505,7 @@ static void intro_tick(void) {
     delay += 60;
     if (after(state.intro.started, delay)) {
         start(&state.intro.chase);
-        vid_tile(4, 20, 0x1F, TILE_PILL);
+        vid_color_tile(4, 20, 0x10, TILE_PILL);
         int16_t x = 224;
         spr_init(0, (sprite_t) { .x=x+20, .y=156, .color = COLOR_BLINKY });
         spr_init(1, (sprite_t) { .x=x+36, .y=156, .color = COLOR_PINKY });
@@ -511,7 +538,7 @@ static void intro_tick(void) {
         }
     }
 
-    // if a key is pressed, advance to gameloop state
+    // if a key is pressed, advance to game state
     if (state.input.any) {
         input_disable();
         start(&state.gfx.fadeout);
@@ -524,8 +551,8 @@ static void hiscore_tick(void) {
     if (now(state.hiscore.started)) {
         start(&state.gfx.fadein);
         input_enable();
-        vid_clear(0x40, 0x0);
-        vid_text(7, 16, 0xF, "HISCORE TODO!");
+        vid_clear(0x40, 0xF);
+        vid_text(7, 16, "HISCORE TODO!");
     }
     if (state.input.any) {
         input_disable();
@@ -534,13 +561,99 @@ static void hiscore_tick(void) {
     }
 }
 
-/*== GAMELOOP GAMESTATE CODE =================================================*/
-static void gameloop_tick(void) {
+/*== ACTUAL GAMESTATE CODE ===================================================*/
+
+// draw the playfield tiles at the start of a round
+static void game_round_init(void) {
+    spr_clear();
+
+    // draw the playfield
+    {
+        vid_clear(0x40, 0x10);
+        vid_color_text(9, 0, 0xF, "HIGH SCORE");
+        vid_color_text(5, 1, 0xF, "00");
+
+        // decode the playfield from an ASCII map
+        static const char* tiles =
+            "0UUUUUUUUUUUU45UUUUUUUUUUUU1" // 3
+            "L............rl............R" // 4
+            "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 5
+            "L r  l.r   l.rl.r   l.r  l R" // 6
+            "L.guuh.guuuh.gh.guuuh.guuh.R" // 7
+            "L..........................R" // 8
+            "L.ebbf.ef.ebbbbbbf.ef.ebbf.R" // 9
+            "L.guuh.rl.guuyxuuh.rl.guuh.R" // 10
+            "L......rl....rl....rl......R" // 11
+            "2BBBBf.rzbbf rl ebbwl.eBBBB3" // 12
+            "     L.rxuuh gh guuyl.R     " // 13
+            "     L.rl          rl.R     " // 14
+            "     L.rl mjj--jjn rl.R     " // 15
+            "UUUUUh.gh i      i gh.gUUUUU" // 16
+            "      .   i      i   .      " // 17
+            "BBBBBf.ef i      i ef.eBBBBB" // 18
+            "     L.rl ojjjjjjp rl.R     " // 19
+            "     L.rl          rl.R     " // 20
+            "     L.rl ebbbbbbf rl.R     " // 21
+            "0UUUUh.gh guuyxuuh gh.gUUUU1" // 22
+            "L............rl............R" // 23
+            "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 24
+            "L.guyl.guuuh.gh.guuuh.rxuh.R" // 25
+            "L ..rl.......  .......rl.. R" // 26
+            "6bf.rl.ef.ebbbbbbf.ef.rl.eb8" // 27
+            "7uh.gh.rl.guuyxuuh.rl.gh.gu9" // 28
+            "L......rl....rl....rl......R" // 29
+            "L.ebbbbwzbbf.rl.ebbwzbbbbf.R" // 30
+            "L.guuuuuuuuh.gh.guuuuuuuuh.R" // 31
+            "L..........................R" // 32
+            "2BBBBBBBBBBBBBBBBBBBBBBBBBB3"; // 33
+
+        for (int y = 3, i = 0; y <= 33; y++) {
+            for (int x = 0; x < 28; x++, i++) {
+                uint8_t t;
+                switch (tiles[i]) {
+                    case ' ': t = 0xFD; break;
+                    case '0': t = 0xD1; break;
+                    case '1': t = 0xD0; break;
+                    case '2': t = 0xD5; break;
+                    case '3': t = 0xD4; break;
+                    case '4': t = 0xFB; break;
+                    case '5': t = 0xFA; break;
+                    case '6': t = 0xD7; break;
+                    case '7': t = 0xD9; break;
+                    case '8': t = 0xD6; break;
+                    case '9': t = 0xD8; break;
+                    case 'U': t = 0xDB; break;
+                    case 'L': t = 0xD3; break;
+                    case 'R': t = 0xD2; break;
+                    case 'B': t = 0xDC; break;
+                    case 'b': t = 0xDF; break;
+                    case 'e': t = 0xE7; break;
+                    case 'f': t = 0xE6; break;
+                    case 'g': t = 0xEB; break;
+                    case 'h': t = 0xEA; break;
+                    case 'l': t = 0xE8; break;
+                    case 'r': t = 0xE9; break;
+                    case 'u': t = 0xE5; break;
+                    case 'w': t = 0xF5; break;
+                    case 'x': t = 0xF2; break;
+                    case 'y': t = 0xF3; break;
+                    case 'z': t = 0xF4; break;
+                    default:  t = 0x10; // dot
+                }
+                state.gfx.video_ram[y][x] = t;
+            }
+        }
+    }
+}
+
+static void game_tick(void) {
     if (now(state.game.started)) {
         start(&state.gfx.fadein);
+        start(&state.game.round_started);
+    }
+    if (now(state.game.round_started)) {
         input_enable();
-        vid_clear(0x40, 0x0);
-        vid_text(7, 16, 0xF, "GAMELOOP TODO!");
+        game_round_init();
     }
     if (state.input.any) {
         input_disable();

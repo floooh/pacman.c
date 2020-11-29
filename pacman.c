@@ -18,16 +18,27 @@
 #define DISPLAY_TILES_Y     (36)
 #define DISPLAY_PIXELS_X    (DISPLAY_TILES_X * TILE_WIDTH)
 #define DISPLAY_PIXELS_Y    (DISPLAY_TILES_Y * TILE_HEIGHT);
-#define NUM_SPRITES         (6)
+#define NUM_SPRITES         (8)
 #define TILE_TEXTURE_WIDTH  (2048)
 #define TILE_TEXTURE_HEIGHT (24)
-#define MAX_VERTICES    (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + 1) * 6)
-#define FADE_TICKS      (30)
+#define MAX_VERTICES        (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + 1) * 6)
+#define FADE_TICKS          (30)
+#define MAX_LIVES           (3)
+#define MAX_FRUITS          (7) // max number of displayed fruits at bottom right
 
 // some common tile numbers
 #define TILE_DOT        (0x10)
 #define TILE_PILL       (0x14)
 #define TILE_GHOST      (0xB0)
+#define TILE_LIFE       (0x20)      // 0x20..0x23
+#define TILE_CHERRIES   (0x90)      // 0x90..0x93
+#define TILE_STRAWBERRY (0x94)      // 0x94..0x97
+#define TILE_PEACH      (0x98)      // 0x98..0x9B
+#define TILE_BELL       (0x9C)      // 0x9C..0x9F
+#define TILE_APPLE      (0xA0)      // 0xA0..0xA3
+#define TILE_GRAPES     (0xA4)      // 0xA4..0xA7
+#define TILE_GALAXIAN   (0xA8)      // 0xA8..0xAB
+#define TILE_KEY        (0xAC)      // 0xAC..0xAF
 
 // some common color codes
 #define COLOR_PACMAN        (9)
@@ -36,6 +47,14 @@
 #define COLOR_INKY          (5)
 #define COLOR_CLYDE         (7)
 #define COLOR_FRIGHTENED    (3)
+#define COLOR_CHERRIES      (0x14)
+#define COLOR_STRAWBERRY    (0xF)
+#define COLOR_PEACH         (0x15)
+#define COLOR_BELL          (0x16)
+#define COLOR_APPLE         (0x14)
+#define COLOR_GRAPES        (0x17)
+#define COLOR_GALAXIAN      (0x9)
+#define COLOR_KEY           (0x16)  // FIXME
 
 typedef enum {
     GAMESTATE_INTRO,
@@ -51,6 +70,20 @@ typedef enum {
     DIR_UP,     // 11
     NUM_DIRS
 } dir_t;
+
+// fruit types
+typedef enum {
+    FRUIT_NONE,
+    FRUIT_CHERRIES,
+    FRUIT_STRAWBERRY,
+    FRUIT_PEACH,
+    FRUIT_APPLE,
+    FRUIT_GRAPES,
+    FRUIT_GALAXIAN,
+    FRUIT_BELL,
+    FRUIT_KEY,
+    FRUIT_NUM,
+} fruit_t;
 
 // a trigger starts an action when a specific game tick is reached
 typedef struct {
@@ -93,6 +126,8 @@ static struct {
     struct {
         trigger_t started;
         trigger_t round_started;
+        uint8_t lives;
+        fruit_t fruits[MAX_FRUITS];
     } game;
 
     // the current input state
@@ -288,6 +323,12 @@ static void input_enable(void) {
 static void vid_clear(uint8_t tile_code, uint8_t color_code) {
     memset(&state.gfx.video_ram, tile_code, sizeof(state.gfx.video_ram));
     memset(&state.gfx.color_ram, color_code, sizeof(state.gfx.color_ram));
+}
+
+// put a color into the color buffer
+static void vid_color(uint8_t x, uint8_t y, uint8_t color_code) {
+    assert((x < DISPLAY_TILES_X) && (y < DISPLAY_TILES_Y));
+    state.gfx.color_ram[y][x] = color_code;
 }
 
 // put a tile into the tile buffer (
@@ -578,7 +619,7 @@ static void game_round_init(void) {
             "0UUUUUUUUUUUU45UUUUUUUUUUUU1" // 3
             "L............rl............R" // 4
             "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 5
-            "L r  l.r   l.rl.r   l.r  l R" // 6
+            "Lar  l.r   l.rl.r   l.r  laR" // 6
             "L.guuh.guuuh.gh.guuuh.guuh.R" // 7
             "L..........................R" // 8
             "L.ebbf.ef.ebbbbbbf.ef.ebbf.R" // 9
@@ -587,18 +628,18 @@ static void game_round_init(void) {
             "2BBBBf.rzbbf rl ebbwl.eBBBB3" // 12
             "     L.rxuuh gh guuyl.R     " // 13
             "     L.rl          rl.R     " // 14
-            "     L.rl mjj--jjn rl.R     " // 15
-            "UUUUUh.gh i      i gh.gUUUUU" // 16
-            "      .   i      i   .      " // 17
-            "BBBBBf.ef i      i ef.eBBBBB" // 18
-            "     L.rl ojjjjjjp rl.R     " // 19
+            "     L.rl mjs--tjn rl.R     " // 15
+            "UUUUUh.gh i      q gh.gUUUUU" // 16
+            "      .   i      q   .      " // 17
+            "BBBBBf.ef i      q ef.eBBBBB" // 18
+            "     L.rl okkkkkkp rl.R     " // 19
             "     L.rl          rl.R     " // 20
             "     L.rl ebbbbbbf rl.R     " // 21
             "0UUUUh.gh guuyxuuh gh.gUUUU1" // 22
             "L............rl............R" // 23
             "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 24
             "L.guyl.guuuh.gh.guuuh.rxuh.R" // 25
-            "L ..rl.......  .......rl.. R" // 26
+            "La..rl.......  .......rl..aR" // 26
             "6bf.rl.ef.ebbbbbbf.ef.rl.eb8" // 27
             "7uh.gh.rl.guuyxuuh.rl.gh.gu9" // 28
             "L......rl....rl....rl......R" // 29
@@ -606,55 +647,85 @@ static void game_round_init(void) {
             "L.guuuuuuuuh.gh.guuuuuuuuh.R" // 31
             "L..........................R" // 32
             "2BBBBBBBBBBBBBBBBBBBBBBBBBB3"; // 33
-
+        uint8_t t[128];
+        for (int i = 0; i < 128; i++) { t[i]=TILE_DOT; }
+        t[' ']=0x40; t['0']=0xD1; t['1']=0xD0; t['2']=0xD5; t['3']=0xD4; t['4']=0xFB;
+        t['5']=0xFA; t['6']=0xD7; t['7']=0xD9; t['8']=0xD6; t['9']=0xD8; t['U']=0xDB;
+        t['L']=0xD3; t['R']=0xD2; t['B']=0xDC; t['b']=0xDF; t['e']=0xE7; t['f']=0xE6;
+        t['g']=0xEB; t['h']=0xEA; t['l']=0xE8; t['r']=0xE9; t['u']=0xE5; t['w']=0xF5;
+        t['x']=0xF2; t['y']=0xF3; t['z']=0xF4; t['m']=0xED; t['n']=0xEC; t['o']=0xEF;
+        t['p']=0xEE; t['j']=0xDD; t['i']=0xD2; t['k']=0xDB; t['q']=0xD3; t['s']=0xF1;
+        t['t']=0xF0; t['-']=0xCF; t['a']=TILE_PILL;
         for (int y = 3, i = 0; y <= 33; y++) {
             for (int x = 0; x < 28; x++, i++) {
-                uint8_t t;
-                switch (tiles[i]) {
-                    case ' ': t = 0xFD; break;
-                    case '0': t = 0xD1; break;
-                    case '1': t = 0xD0; break;
-                    case '2': t = 0xD5; break;
-                    case '3': t = 0xD4; break;
-                    case '4': t = 0xFB; break;
-                    case '5': t = 0xFA; break;
-                    case '6': t = 0xD7; break;
-                    case '7': t = 0xD9; break;
-                    case '8': t = 0xD6; break;
-                    case '9': t = 0xD8; break;
-                    case 'U': t = 0xDB; break;
-                    case 'L': t = 0xD3; break;
-                    case 'R': t = 0xD2; break;
-                    case 'B': t = 0xDC; break;
-                    case 'b': t = 0xDF; break;
-                    case 'e': t = 0xE7; break;
-                    case 'f': t = 0xE6; break;
-                    case 'g': t = 0xEB; break;
-                    case 'h': t = 0xEA; break;
-                    case 'l': t = 0xE8; break;
-                    case 'r': t = 0xE9; break;
-                    case 'u': t = 0xE5; break;
-                    case 'w': t = 0xF5; break;
-                    case 'x': t = 0xF2; break;
-                    case 'y': t = 0xF3; break;
-                    case 'z': t = 0xF4; break;
-                    default:  t = 0x10; // dot
-                }
-                state.gfx.video_ram[y][x] = t;
+                state.gfx.video_ram[y][x] = t[tiles[i] & 127];
             }
+        }
+        // patch colors
+        vid_color(13, 15, 0x18); vid_color(14, 15, 0x18); // ghost house gate
+        // PLAYER ONE READY!
+        vid_color_text(9, 14, 0x5, "PLAYER ONE");
+        vid_color_text(11, 20, 0x9, "READY!");
+    }
+}
+
+/* helper function to draw a tile-quad, arranged as:
+    |t+1|t+0|
+    |t+3|t+2|
+*/
+static void draw_tile_quad(uint8_t x, uint8_t y, uint8_t color_code, uint8_t tile_code) {
+    for (int yy=0; yy<2; yy++) {
+        for (int xx=0; xx<2; xx++) {
+            uint8_t t = tile_code + yy*2 + (1-xx);
+            vid_color_tile(xx+x, yy+y, color_code, t);
         }
     }
 }
 
+// draw all the off-playfield status information
+static void draw_status(void) {
+    // lives at bottom left screen
+    for (int i = 0; i < MAX_LIVES; i++) {
+        uint8_t color = (i < state.game.lives) ? COLOR_PACMAN : 0;
+        draw_tile_quad(2+2*i, 34, color, TILE_LIFE);
+    }
+    // draw fruit table
+    uint8_t fruit_tiles_colors[FRUIT_NUM][2] = {
+        { 0, 0 },   // FRUIT_NONE
+        { TILE_CHERRIES, COLOR_CHERRIES },
+        { TILE_STRAWBERRY, COLOR_STRAWBERRY },
+        { TILE_PEACH, COLOR_PEACH },
+        { TILE_APPLE, COLOR_APPLE },
+        { TILE_GRAPES, COLOR_GRAPES },
+        { TILE_GALAXIAN, COLOR_GALAXIAN },
+        { TILE_BELL, COLOR_BELL, },
+        { TILE_KEY, COLOR_KEY }
+    };
+    for (int i = 0; i < MAX_FRUITS; i++) {
+        uint8_t tile_code = fruit_tiles_colors[state.game.fruits[i]][0];
+        uint8_t color_code = fruit_tiles_colors[state.game.fruits[i]][1];
+        draw_tile_quad(24-2*i, 34, color_code, tile_code);
+    }
+}
+
 static void game_tick(void) {
+    // initialize game state
     if (now(state.game.started)) {
         start(&state.gfx.fadein);
         start(&state.game.round_started);
+        state.game.lives = MAX_LIVES;
+        for (int i = 0; i < MAX_FRUITS; i++) {
+            state.game.fruits[i] = (i==0) ? FRUIT_CHERRIES:FRUIT_NONE;
+        }
     }
+    // initialize new round
     if (now(state.game.round_started)) {
         input_enable();
         game_round_init();
     }
+    // draw off-playfield status
+    draw_status();
+
     if (state.input.any) {
         input_disable();
         start(&state.gfx.fadeout);

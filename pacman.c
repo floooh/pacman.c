@@ -1018,8 +1018,8 @@ static void gfx_add_tile_vertices(void) {
             const float x1 = x0 + dx;
             const float y0 = ty * dy;
             const float y1 = y0 + dy;
-            const float u0 = tile_code * du;
-            const float u1 = u0 + du;
+            const float u0 = (tile_code * du) + (0.5f / TILE_TEXTURE_WIDTH);
+            const float u1 = (tile_code * du) + du;
             const float v0 = 0.0f;
             const float v1 = v0 + dv;
             /*
@@ -1065,8 +1065,8 @@ static void gfx_add_sprite_vertices(void) {
                 y0 = spr->y * dy;
                 y1 = y0 + dy * SPRITE_HEIGHT;
             }
-            const float u0 = spr->tile * du;
-            const float u1 = u0 + du;
+            const float u0 = (spr->tile * du) + (0.5f / TILE_TEXTURE_WIDTH);
+            const float u1 = (spr->tile * du) + du;
             const float v0 = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
             const float v1 = v0 + dv;
             const uint8_t color = spr->color;

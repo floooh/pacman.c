@@ -25,6 +25,7 @@
 #define FADE_TICKS          (30)
 #define MAX_LIVES           (3)
 #define MAX_FRUITS          (7) // max number of displayed fruits at bottom right
+#define UV_NUDGE            (1.0f/16384.0f)
 
 // some common tile numbers
 #define TILE_DOT        (0x10)
@@ -1018,10 +1019,10 @@ static void gfx_add_tile_vertices(void) {
             const float x1 = x0 + dx;
             const float y0 = ty * dy;
             const float y1 = y0 + dy;
-            const float u0 = (tile_code * du) + (0.5f / TILE_TEXTURE_WIDTH);
-            const float u1 = (tile_code * du) + du;
-            const float v0 = 0.0f;
-            const float v1 = v0 + dv;
+            const float u0 = (tile_code * du) + UV_NUDGE;
+            const float u1 = ((tile_code * du) + du) - UV_NUDGE;
+            const float v0 = UV_NUDGE;
+            const float v1 = dv - UV_NUDGE;
             /*
                 x0,y0
                 +-----+
@@ -1065,10 +1066,10 @@ static void gfx_add_sprite_vertices(void) {
                 y0 = spr->y * dy;
                 y1 = y0 + dy * SPRITE_HEIGHT;
             }
-            const float u0 = (spr->tile * du) + (0.5f / TILE_TEXTURE_WIDTH);
-            const float u1 = (spr->tile * du) + du;
-            const float v0 = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
-            const float v1 = v0 + dv;
+            const float u0 = (spr->tile * du) + UV_NUDGE;
+            const float u1 = ((spr->tile * du) + du) - UV_NUDGE;
+            const float v0 = ((float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT) + UV_NUDGE;
+            const float v1 = (((float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT) + dv) - UV_NUDGE;
             const uint8_t color = spr->color;
             gfx_add_vertex(x0, y0, u0, v0, color, 0xFF);
             gfx_add_vertex(x1, y0, u1, v0, color, 0xFF);
@@ -1098,8 +1099,28 @@ static void gfx_add_fade_vertices(void) {
     gfx_add_vertex(0.0f, 1.0f, u0, v1, 0, fade);
 }
 
-static void gfx_draw(void) {
+// Adjust the viewport so that the aspect ratio is always correct.
+static void gfx_adjust_viewport(int canvas_width, int canvas_height) {
+    const float canvas_aspect = (float)canvas_width / (float)canvas_height;
+    const float playfield_aspect = (float)DISPLAY_TILES_X / (float)DISPLAY_TILES_Y;
+    int vp_x, vp_y, vp_w, vp_h;
+    const int border = 10;
+    if (playfield_aspect < canvas_aspect) {
+        vp_y = border;
+        vp_h = canvas_height - 2*border;
+        vp_w = (int)(canvas_height * playfield_aspect - 2*border);
+        vp_x = (canvas_width - vp_w) / 2;
+    }
+    else {
+        vp_x = border;
+        vp_w = canvas_width - 2*border;
+        vp_h = (int)(canvas_width / playfield_aspect - 2*border);
+        vp_y = (canvas_height - vp_h) / 2;
+    }
+    sg_apply_viewport(vp_x, vp_y, vp_w, vp_h, true);
+}
 
+static void gfx_draw(void) {
     // update the playfield and sprite vertex buffer
     state.gfx.num_vertices = 0;
     gfx_add_tile_vertices();
@@ -1114,25 +1135,7 @@ static void gfx_draw(void) {
     const int canvas_width = sapp_width();
     const int canvas_height = sapp_height();
     sg_begin_default_pass(&state.gfx.pass_action, canvas_width, canvas_height);
-
-    // force correct aspect ratio, with 5 pixels border
-    const float canvas_aspect = (float)canvas_width / (float)canvas_height;
-    const float playfield_aspect = (float)DISPLAY_TILES_X / (float)DISPLAY_TILES_Y;
-    const int border = 5;
-    int vp_x, vp_y, vp_w, vp_h;
-    if (playfield_aspect < canvas_aspect) {
-        vp_y = border;
-        vp_h = canvas_height - (2 * border);
-        vp_w = (int)(canvas_height * playfield_aspect) - (2 * border);
-        vp_x = (canvas_width - vp_w) / 2;
-    }
-    else {
-        vp_x = border;
-        vp_w = canvas_width - 2 * border;
-        vp_h = (int)(canvas_width / playfield_aspect) - (2 * border);
-        vp_y = (canvas_height - vp_h) / 2;
-    }
-    sg_apply_viewport(vp_x, vp_y, vp_w, vp_h, true);
+    gfx_adjust_viewport(canvas_width, canvas_height);
     sg_apply_pipeline(state.gfx.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.vbuf,

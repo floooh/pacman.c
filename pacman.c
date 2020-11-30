@@ -859,6 +859,38 @@ static void gfx_init(void) {
                 "  return color;\n"
                 "}\n";
             break;
+        case SG_BACKEND_D3D11:
+            vs_src =
+                "struct vs_in {\n"
+                "  float4 pos: POSITION;\n"
+                "  float2 uv: TEXCOORD0;\n"
+                "  float4 data: TEXCOORD1;\n"
+                "};\n"
+                "struct vs_out {\n"
+                "  float2 uv: UV;\n"
+                "  float4 data: DATA;\n"
+                "  float4 pos: SV_Position;\n"
+                "};\n"
+                "vs_out main(vs_in inp) {\n"
+                "  vs_out outp;"
+                "  outp.pos = float4(inp.pos.xy * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);\n"
+                "  outp.uv  = inp.uv;"
+                "  outp.data = inp.data;\n"
+                "  return outp;\n"
+                "}\n";
+            fs_src =
+                "Texture2D<float4> tile_tex: register(t0);\n"
+                "Texture2D<float4> pal_tex: register(t1);\n"
+                "sampler tile_smp: register(s0);\n"
+                "sampler pal_smp: register(s1);\n"
+                "float4 main(float2 uv: UV, float4 data: DATA): SV_Target0 {\n"
+                "  float color_code = data.x;\n"
+                "  float tile_color = tile_tex.Sample(tile_smp, uv).x;\n"
+                "  float2 pal_uv = float2(color_code * 4 + tile_color, 0);\n"
+                "  float4 color = pal_tex.Sample(pal_smp, pal_uv) * float4(1, 1, 1, data.y);\n"
+                "  return color;\n"
+                "}\n";
+            break;
         default:
             assert(false);
     }
@@ -866,6 +898,11 @@ static void gfx_init(void) {
     // create pipeline and shader object
     state.gfx.pip = sg_make_pipeline(&(sg_pipeline_desc){
         .shader = sg_make_shader(&(sg_shader_desc){
+           .attrs = {
+                [0] = { .sem_name="POSITION" },
+                [1] = { .sem_name="TEXCOORD", .sem_index=0 },
+                [2] = { .sem_name="TEXCOORD", .sem_index=1 },
+            },
             .vs.source = vs_src,
             .fs = {
                 .images[0].type = SG_IMAGETYPE_2D,
@@ -1111,14 +1148,14 @@ static void gfx_draw(void) {
 static void gfx_fade(void) {
     if (phase(state.gfx.fadein, 0, FADE_TICKS)) {
         float t = (float)since(state.gfx.fadein) / FADE_TICKS;
-        state.gfx.fade = 255 * (1.0f - t);
+        state.gfx.fade = (uint8_t) (255.0f * (1.0f - t));
     }
     if (after(state.gfx.fadein, FADE_TICKS)) {
         state.gfx.fade = 0;
     }
     if (phase(state.gfx.fadeout, 0, FADE_TICKS)) {
         float t = (float)since(state.gfx.fadeout) / FADE_TICKS;
-        state.gfx.fade = 255 * t;
+        state.gfx.fade = (uint8_t) (255.0f * t);
     }
     if (after(state.gfx.fadeout, FADE_TICKS)) {
         state.gfx.fade = 255;

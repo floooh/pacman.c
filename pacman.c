@@ -17,7 +17,7 @@
 #define DISPLAY_TILES_X     (28)
 #define DISPLAY_TILES_Y     (36)
 #define DISPLAY_PIXELS_X    (DISPLAY_TILES_X * TILE_WIDTH)
-#define DISPLAY_PIXELS_Y    (DISPLAY_TILES_Y * TILE_HEIGHT);
+#define DISPLAY_PIXELS_Y    (DISPLAY_TILES_Y * TILE_HEIGHT)
 #define NUM_SPRITES         (8)
 #define TILE_TEXTURE_WIDTH  (2048)
 #define TILE_TEXTURE_HEIGHT (24)
@@ -25,7 +25,6 @@
 #define FADE_TICKS          (30)
 #define MAX_LIVES           (3)
 #define MAX_FRUITS          (7) // max number of displayed fruits at bottom right
-#define UV_NUDGE            (1.0f/16384.0f)
 
 // some common tile numbers
 #define TILE_DOT        (0x10)
@@ -55,7 +54,7 @@
 #define COLOR_APPLE         (0x14)
 #define COLOR_GRAPES        (0x17)
 #define COLOR_GALAXIAN      (0x9)
-#define COLOR_KEY           (0x16)  // FIXME
+#define COLOR_KEY           (0x16)
 
 typedef enum {
     GAMESTATE_INTRO,
@@ -151,7 +150,7 @@ static struct {
         uint8_t video_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // tile codes
         uint8_t color_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // color codes
 
-        // up to 6 sprites
+        // up to 8 sprites
         sprite_t sprite[NUM_SPRITES];
 
         // current fade value (0: no fade, 255: fully opaque)
@@ -159,10 +158,18 @@ static struct {
 
         // sokol-gfx resources
         sg_pass_action pass_action;
-        sg_buffer vbuf;
-        sg_image tile_img;
-        sg_image palette_img;
-        sg_pipeline pip;
+        struct {
+            sg_buffer vbuf;
+            sg_image tile_img;
+            sg_image palette_img;
+            sg_image render_target;
+            sg_pipeline pip;
+            sg_pass pass;
+        } offscreen;
+        struct {
+            sg_buffer quad_vbuf;
+            sg_pipeline pip;
+        } display;
 
         // intermediate vertex buffer for tile- and sprite-rendering
         int num_vertices;
@@ -170,6 +177,9 @@ static struct {
 
         // scratch-buffer for tile-decoding (only happens once)
         uint8_t tile_pixels[TILE_TEXTURE_HEIGHT][TILE_TEXTURE_WIDTH];
+
+        // scratch buffer for the color palette
+        uint32_t color_palette[256];
     } gfx;
 } state;
 
@@ -615,7 +625,7 @@ static void game_round_init(void) {
         vid_color_text(9, 0, 0xF, "HIGH SCORE");
         vid_color_text(5, 1, 0xF, "00");
 
-        // decode the playfield from an ASCII map
+        // decode the playfield from an ASCII map into tiles codes
         static const char* tiles =
             "0UUUUUUUUUUUU45UUUUUUUUUUUU1" // 3
             "L............rl............R" // 4
@@ -736,6 +746,220 @@ static void game_tick(void) {
 
 /*== GFX SUBSYSTEM ===========================================================*/
 
+/* create all sokol-gfx resources */
+static void gfx_create_resources(void) {
+    // pass action for clearing the background to black
+    state.gfx.pass_action = (sg_pass_action) {
+        .colors[0] = { .action = SG_ACTION_CLEAR, .val = { 0.0f, 0.0f, 0.0f, 1.0f } }
+    };
+
+    // create a dynamic vertex buffer for the tile and sprite quads
+    state.gfx.offscreen.vbuf = sg_make_buffer(&(sg_buffer_desc){
+        .type = SG_BUFFERTYPE_VERTEXBUFFER,
+        .usage = SG_USAGE_STREAM,
+        .size = sizeof(state.gfx.vertices),
+    });
+
+    // create a simple quad vertex buffer for rendering the offscreen render target to the display
+    float quad_verts[]= { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f };
+    state.gfx.display.quad_vbuf = sg_make_buffer(&(sg_buffer_desc){
+        .size = sizeof(quad_verts),
+        .content = quad_verts,
+    });
+
+    // shader sources for all platforms (FIXME: should we use precompiled shader blobs instead?)
+    const char* offscreen_vs_src = 0;
+    const char* offscreen_fs_src = 0;
+    const char* display_vs_src = 0;
+    const char* display_fs_src = 0;
+    switch (sg_query_backend()) {
+        case SG_BACKEND_METAL_MACOS:
+            offscreen_vs_src = 
+                "#include <metal_stdlib>\n"
+                "using namespace metal;\n"
+                "struct vs_in {\n"
+                "  float4 pos [[attribute(0)]];\n"
+                "  float2 uv [[attribute(1)]];\n"
+                "  float4 data [[attribute(2)]];\n"
+                "};\n"
+                "struct vs_out {\n"
+                "  float4 pos [[position]];\n"
+                "  float2 uv;\n"
+                "  float4 data;\n"
+                "};\n"
+                "vertex vs_out _main(vs_in in [[stage_in]]) {\n"
+                "  vs_out out;\n"
+                "  out.pos = float4((in.pos.xy - 0.5) * float2(2.0, -2.0), 0.5, 1.0);\n"
+                "  out.uv  = in.uv;"
+                "  out.data = in.data;\n"
+                "  return out;\n"
+                "}\n";
+            offscreen_fs_src =
+                "#include <metal_stdlib>\n"
+                "using namespace metal;\n"
+                "struct ps_in {\n"
+                "  float2 uv;\n"
+                "  float4 data;\n"
+                "};\n"
+                "fragment float4 _main(ps_in in [[stage_in]],\n"
+                "                      texture2d<float> tile_tex [[texture(0)]],\n"
+                "                      texture2d<float> pal_tex [[texture(1)]],\n"
+                "                      sampler tile_smp [[sampler(0)]],\n"
+                "                      sampler pal_smp [[sampler(1)]])\n"
+                "{\n"
+                "  float color_code = in.data.x;\n" // (0..31) / 255
+                "  float tile_color = tile_tex.sample(tile_smp, in.uv).x;\n" // (0..3) / 255
+                "  float2 pal_uv = float2(color_code * 4 + tile_color, 0);\n"
+                "  float4 color = pal_tex.sample(pal_smp, pal_uv) * float4(1, 1, 1, in.data.y);\n"
+                "  return color;\n"
+                "}\n";
+            break;
+        case SG_BACKEND_D3D11:
+            offscreen_vs_src =
+                "struct vs_in {\n"
+                "  float4 pos: POSITION;\n"
+                "  float2 uv: TEXCOORD0;\n"
+                "  float4 data: TEXCOORD1;\n"
+                "};\n"
+                "struct vs_out {\n"
+                "  float2 uv: UV;\n"
+                "  float4 data: DATA;\n"
+                "  float4 pos: SV_Position;\n"
+                "};\n"
+                "vs_out main(vs_in inp) {\n"
+                "  vs_out outp;"
+                "  outp.pos = float4(inp.pos.xy * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);\n"
+                "  outp.uv  = inp.uv;"
+                "  outp.data = inp.data;\n"
+                "  return outp;\n"
+                "}\n";
+            offscreen_fs_src =
+                "Texture2D<float4> tile_tex: register(t0);\n"
+                "Texture2D<float4> pal_tex: register(t1);\n"
+                "sampler tile_smp: register(s0);\n"
+                "sampler pal_smp: register(s1);\n"
+                "float4 main(float2 uv: UV, float4 data: DATA): SV_Target0 {\n"
+                "  float color_code = data.x;\n"
+                "  float tile_color = tile_tex.Sample(tile_smp, uv).x;\n"
+                "  float2 pal_uv = float2(color_code * 4 + tile_color, 0);\n"
+                "  float4 color = pal_tex.Sample(pal_smp, pal_uv) * float4(1, 1, 1, data.y);\n"
+                "  return color;\n"
+                "}\n";
+            display_vs_src =
+                "struct vs_out {\n"
+                "  float2 uv: UV;\n"
+                "  float4 pos: SV_Position;\n"
+                "};\n"
+                "vs_out main(float4 pos: POSITION) {\n"
+                "  vs_out outp;\n"
+                "  outp.pos = float4((pos.xy - 0.5) * float2(2.0, -2.0), 0.0, 1.0);\n"
+                "  outp.uv = pos.xy;\n"
+                "  return outp;\n"
+                "}\n";
+            display_fs_src =
+                "Texture2D<float4> tex: register(t0);\n"
+                "sampler smp: register(s0);\n"
+                "float4 main(float2 uv: UV): SV_Target0 {\n"
+                "  return tex.Sample(smp, uv);\n"
+                "}\n";
+            break;
+        default:
+            assert(false);
+    }
+
+    // create pipeline and shader object for rendering into offscreen render target
+    state.gfx.offscreen.pip = sg_make_pipeline(&(sg_pipeline_desc){
+        .shader = sg_make_shader(&(sg_shader_desc){
+           .attrs = {
+                [0] = { .sem_name="POSITION" },
+                [1] = { .sem_name="TEXCOORD", .sem_index=0 },
+                [2] = { .sem_name="TEXCOORD", .sem_index=1 },
+            },
+            .vs.source = offscreen_vs_src,
+            .fs = {
+                .images[0].type = SG_IMAGETYPE_2D,
+                .images[1].type = SG_IMAGETYPE_2D,
+                .source = offscreen_fs_src
+            }
+        }),
+        .layout = {
+            .attrs = {
+                [0].format = SG_VERTEXFORMAT_FLOAT2,
+                [1].format = SG_VERTEXFORMAT_FLOAT2,
+                [2].format = SG_VERTEXFORMAT_UBYTE4N,
+            }
+        },
+        .blend = {
+            .enabled = true,
+            .color_format = SG_PIXELFORMAT_RGBA8,
+            .depth_format = SG_PIXELFORMAT_NONE,
+            .src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
+            .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+        }
+    });
+    
+    // create pipeline and shader for rendering into display
+    state.gfx.display.pip = sg_make_pipeline(&(sg_pipeline_desc){
+        .shader = sg_make_shader(&(sg_shader_desc){
+            .attrs[0].sem_name="POSITION",
+            .vs.source = display_vs_src,
+            .fs = {
+                .images[0].type = SG_IMAGETYPE_2D,
+                .source = display_fs_src
+            }
+        }),
+        .layout.attrs[0].format = SG_VERTEXFORMAT_FLOAT2,
+        .primitive_type = SG_PRIMITIVETYPE_TRIANGLE_STRIP
+    });
+
+    // create a render target image with a fixed upscale ratio
+    state.gfx.offscreen.render_target = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = DISPLAY_PIXELS_X * 2,
+        .height = DISPLAY_PIXELS_Y * 2,
+        .pixel_format = SG_PIXELFORMAT_RGBA8,
+        .min_filter = SG_FILTER_LINEAR,
+        .mag_filter = SG_FILTER_LINEAR,
+        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+    });
+
+    // pass object for rendering into the offscreen render target
+    state.gfx.offscreen.pass = sg_make_pass(&(sg_pass_desc){
+        .color_attachments[0].image = state.gfx.offscreen.render_target
+    });
+
+    // create the 'tile-ROM-texture'
+    state.gfx.offscreen.tile_img = sg_make_image(&(sg_image_desc){
+        .width  = TILE_TEXTURE_WIDTH,
+        .height = TILE_TEXTURE_HEIGHT,
+        .pixel_format = SG_PIXELFORMAT_R8,
+        .min_filter = SG_FILTER_NEAREST,
+        .mag_filter = SG_FILTER_NEAREST,
+        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+        .content.subimage[0][0] = {
+            .ptr = state.gfx.tile_pixels,
+            .size = sizeof(state.gfx.tile_pixels)
+        }
+    });
+
+    // create the palette texture
+    state.gfx.offscreen.palette_img = sg_make_image(&(sg_image_desc){
+        .width = 256,
+        .height = 1,
+        .pixel_format = SG_PIXELFORMAT_RGBA8,
+        .min_filter = SG_FILTER_NEAREST,
+        .mag_filter = SG_FILTER_NEAREST,
+        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+        .content.subimage[0][0] = {
+            .ptr = state.gfx.color_palette,
+            .size = sizeof(state.gfx.color_palette)
+        }
+    });
+}
+
 /*
     8x4 tile decoder (taken from: https://github.com/floooh/chips/blob/master/systems/namco.h)
 
@@ -796,135 +1020,7 @@ static inline void gfx_decode_sprite(uint8_t sprite_code) {
     gfx_decode_tile_8x4(x1, y3, rom_sprites, 64,  0, sprite_code);
 }
 
-static void gfx_init(void) {
-
-    disable(&state.gfx.fadein);
-    disable(&state.gfx.fadeout);
-    state.gfx.fade = 0xFF;
-    spr_clear();
-
-    // pass action for clearing the background to black
-    state.gfx.pass_action = (sg_pass_action) {
-        .colors[0] = { .action = SG_ACTION_CLEAR, .val = { 0.0f, 0.0f, 0.0f, 1.0f } }
-    };
-
-    // create a dynamic vertex buffer for the tile and sprite quads
-    state.gfx.vbuf = sg_make_buffer(&(sg_buffer_desc){
-        .type = SG_BUFFERTYPE_VERTEXBUFFER,
-        .usage = SG_USAGE_STREAM,
-        .size = sizeof(state.gfx.vertices),
-    });
-
-    // shader sources for all platforms (FIXME: should we use precompiled shader blobs instead?)
-    const char* vs_src = 0;
-    const char* fs_src = 0;
-    switch (sg_query_backend()) {
-        case SG_BACKEND_METAL_MACOS:
-            vs_src = 
-                "#include <metal_stdlib>\n"
-                "using namespace metal;\n"
-                "struct vs_in {\n"
-                "  float4 pos [[attribute(0)]];\n"
-                "  float2 uv [[attribute(1)]];\n"
-                "  float4 data [[attribute(2)]];\n"
-                "};\n"
-                "struct vs_out {\n"
-                "  float4 pos [[position]];\n"
-                "  float2 uv;\n"
-                "  float4 data;\n"
-                "};\n"
-                "vertex vs_out _main(vs_in in [[stage_in]]) {\n"
-                "  vs_out out;\n"
-                "  out.pos = float4((in.pos.xy - 0.5) * float2(2.0, -2.0), 0.5, 1.0);\n"
-                "  out.uv  = in.uv;"
-                "  out.data = in.data;\n"
-                "  return out;\n"
-                "}\n";
-            fs_src =
-                "#include <metal_stdlib>\n"
-                "using namespace metal;\n"
-                "struct ps_in {\n"
-                "  float2 uv;\n"
-                "  float4 data;\n"
-                "};\n"
-                "fragment float4 _main(ps_in in [[stage_in]],\n"
-                "                      texture2d<float> tile_tex [[texture(0)]],\n"
-                "                      texture2d<float> pal_tex [[texture(1)]],\n"
-                "                      sampler tile_smp [[sampler(0)]],\n"
-                "                      sampler pal_smp [[sampler(1)]])\n"
-                "{\n"
-                "  float color_code = in.data.x;\n" // (0..31) / 255
-                "  float tile_color = tile_tex.sample(tile_smp, in.uv).x;\n" // (0..3) / 255
-                "  float2 pal_uv = float2(color_code * 4 + tile_color, 0);\n"
-                "  float4 color = pal_tex.sample(pal_smp, pal_uv) * float4(1, 1, 1, in.data.y);\n"
-                "  return color;\n"
-                "}\n";
-            break;
-        case SG_BACKEND_D3D11:
-            vs_src =
-                "struct vs_in {\n"
-                "  float4 pos: POSITION;\n"
-                "  float2 uv: TEXCOORD0;\n"
-                "  float4 data: TEXCOORD1;\n"
-                "};\n"
-                "struct vs_out {\n"
-                "  float2 uv: UV;\n"
-                "  float4 data: DATA;\n"
-                "  float4 pos: SV_Position;\n"
-                "};\n"
-                "vs_out main(vs_in inp) {\n"
-                "  vs_out outp;"
-                "  outp.pos = float4(inp.pos.xy * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);\n"
-                "  outp.uv  = inp.uv;"
-                "  outp.data = inp.data;\n"
-                "  return outp;\n"
-                "}\n";
-            fs_src =
-                "Texture2D<float4> tile_tex: register(t0);\n"
-                "Texture2D<float4> pal_tex: register(t1);\n"
-                "sampler tile_smp: register(s0);\n"
-                "sampler pal_smp: register(s1);\n"
-                "float4 main(float2 uv: UV, float4 data: DATA): SV_Target0 {\n"
-                "  float color_code = data.x;\n"
-                "  float tile_color = tile_tex.Sample(tile_smp, uv).x;\n"
-                "  float2 pal_uv = float2(color_code * 4 + tile_color, 0);\n"
-                "  float4 color = pal_tex.Sample(pal_smp, pal_uv) * float4(1, 1, 1, data.y);\n"
-                "  return color;\n"
-                "}\n";
-            break;
-        default:
-            assert(false);
-    }
-
-    // create pipeline and shader object
-    state.gfx.pip = sg_make_pipeline(&(sg_pipeline_desc){
-        .shader = sg_make_shader(&(sg_shader_desc){
-           .attrs = {
-                [0] = { .sem_name="POSITION" },
-                [1] = { .sem_name="TEXCOORD", .sem_index=0 },
-                [2] = { .sem_name="TEXCOORD", .sem_index=1 },
-            },
-            .vs.source = vs_src,
-            .fs = {
-                .images[0].type = SG_IMAGETYPE_2D,
-                .images[1].type = SG_IMAGETYPE_2D,
-                .source = fs_src
-            }
-        }),
-        .layout = {
-            .attrs = {
-                [0].format = SG_VERTEXFORMAT_FLOAT2,
-                [1].format = SG_VERTEXFORMAT_FLOAT2,
-                [2].format = SG_VERTEXFORMAT_UBYTE4N,
-            }
-        },
-        .blend = {
-            .enabled = true,
-            .src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
-            .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-        }
-    });
-
+static void gfx_decode_tiles(void) {
     // decode the Pacman tile- and sprite-ROM-dumps into a 8bpp texture
     for (uint32_t tile_code = 0; tile_code < 256; tile_code++) {
         gfx_decode_tile(tile_code);
@@ -938,20 +1034,9 @@ static void gfx_init(void) {
             state.gfx.tile_pixels[y][x] = 1;
         }
     }
-    state.gfx.tile_img = sg_make_image(&(sg_image_desc){
-        .width  = TILE_TEXTURE_WIDTH,
-        .height = TILE_TEXTURE_HEIGHT,
-        .pixel_format = SG_PIXELFORMAT_R8,
-        .min_filter = SG_FILTER_NEAREST,
-        .mag_filter = SG_FILTER_NEAREST,
-        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
-        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
-        .content.subimage[0][0] = {
-            .ptr = state.gfx.tile_pixels,
-            .size = sizeof(state.gfx.tile_pixels)
-        }
-    });
+}
 
+static void gfx_decode_color_palette(void) {
     /* decode the Pacman color palette into a palette texture, on the original
         hardware, color lookup happens in two steps, first through 256-entry
         palette which indirects into a 32-entry hardware-color palette
@@ -973,27 +1058,23 @@ static void gfx_init(void) {
         uint8_t b = ((rgb>>6)&1) * 0x47 + ((rgb>>7)&1) * 0x97;
         hw_colors[i] = 0xFF000000 | (b<<16) | (g<<8) | r;
     }
-    uint32_t color_palette[256];
     for (int i = 0; i < 256; i++) {
-        color_palette[i] = hw_colors[rom_palette[i] & 0xF];
+        state.gfx.color_palette[i] = hw_colors[rom_palette[i] & 0xF];
         // first color in each color block is transparent
         if ((i & 3) == 0) {
-            color_palette[i] &= 0x00FFFFFF;
+            state.gfx.color_palette[i] &= 0x00FFFFFF;
         }
     }
-    state.gfx.palette_img = sg_make_image(&(sg_image_desc){
-        .width = 256,
-        .height = 1,
-        .pixel_format = SG_PIXELFORMAT_RGBA8,
-        .min_filter = SG_FILTER_NEAREST,
-        .mag_filter = SG_FILTER_NEAREST,
-        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
-        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
-        .content.subimage[0][0] = {
-            .ptr = color_palette,
-            .size = sizeof(color_palette)
-        }
-    });
+}
+
+static void gfx_init(void) {
+    disable(&state.gfx.fadein);
+    disable(&state.gfx.fadeout);
+    state.gfx.fade = 0xFF;
+    spr_clear();
+    gfx_decode_tiles();
+    gfx_decode_color_palette(); 
+    gfx_create_resources();
 }
 
 static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code, uint8_t fade) {
@@ -1019,10 +1100,10 @@ static void gfx_add_tile_vertices(void) {
             const float x1 = x0 + dx;
             const float y0 = ty * dy;
             const float y1 = y0 + dy;
-            const float u0 = (tile_code * du) + UV_NUDGE;
-            const float u1 = ((tile_code * du) + du) - UV_NUDGE;
-            const float v0 = UV_NUDGE;
-            const float v1 = dv - UV_NUDGE;
+            const float u0 = tile_code * du;
+            const float u1 = u0 + du;
+            const float v0 = 0.0f;
+            const float v1 = dv;
             /*
                 x0,y0
                 +-----+
@@ -1066,10 +1147,10 @@ static void gfx_add_sprite_vertices(void) {
                 y0 = spr->y * dy;
                 y1 = y0 + dy * SPRITE_HEIGHT;
             }
-            const float u0 = (spr->tile * du) + UV_NUDGE;
-            const float u1 = ((spr->tile * du) + du) - UV_NUDGE;
-            const float v0 = ((float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT) + UV_NUDGE;
-            const float v1 = (((float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT) + dv) - UV_NUDGE;
+            const float u0 = spr->tile * du;
+            const float u1 = u0 + du;
+            const float v0 = ((float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT);
+            const float v1 = v0 + dv;
             const uint8_t color = spr->color;
             gfx_add_vertex(x0, y0, u0, v0, color, 0xFF);
             gfx_add_vertex(x1, y0, u1, v0, color, 0xFF);
@@ -1129,20 +1210,30 @@ static void gfx_draw(void) {
         gfx_add_fade_vertices();
     }
     assert(state.gfx.num_vertices <= MAX_VERTICES);
-    sg_update_buffer(state.gfx.vbuf, &state.gfx.vertices, state.gfx.num_vertices * sizeof(vertex_t));
+    sg_update_buffer(state.gfx.offscreen.vbuf, &state.gfx.vertices, state.gfx.num_vertices * sizeof(vertex_t));
 
-    // render everything in a sokol-gfx pass
+    // render tiles and sprites into offscreen render target
+    sg_begin_pass(state.gfx.offscreen.pass, &state.gfx.pass_action);
+    sg_apply_pipeline(state.gfx.offscreen.pip);
+    sg_apply_bindings(&(sg_bindings){
+        .vertex_buffers[0] = state.gfx.offscreen.vbuf,
+        .fs_images[0] = state.gfx.offscreen.tile_img,
+        .fs_images[1] = state.gfx.offscreen.palette_img,
+    });
+    sg_draw(0, state.gfx.num_vertices, 1);
+    sg_end_pass();
+
+    // upscale-render the offscreen render target into the display framebuffer
     const int canvas_width = sapp_width();
     const int canvas_height = sapp_height();
     sg_begin_default_pass(&state.gfx.pass_action, canvas_width, canvas_height);
     gfx_adjust_viewport(canvas_width, canvas_height);
-    sg_apply_pipeline(state.gfx.pip);
+    sg_apply_pipeline(state.gfx.display.pip);
     sg_apply_bindings(&(sg_bindings){
-        .vertex_buffers[0] = state.gfx.vbuf,
-        .fs_images[0] = state.gfx.tile_img,
-        .fs_images[1] = state.gfx.palette_img,
+        .vertex_buffers[0] = state.gfx.display.quad_vbuf,
+        .fs_images[0] = state.gfx.offscreen.render_target
     });
-    sg_draw(0, state.gfx.num_vertices, 1);
+    sg_draw(0, 4, 1);
     sg_end_pass();
     sg_commit();
 }

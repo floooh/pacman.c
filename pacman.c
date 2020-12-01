@@ -813,6 +813,34 @@ static void gfx_create_resources(void) {
                 "  float4 color = pal_tex.sample(pal_smp, pal_uv) * float4(1, 1, 1, in.data.y);\n"
                 "  return color;\n"
                 "}\n";
+            display_vs_src =
+                "#include <metal_stdlib>\n"
+                "using namespace metal;\n"
+                "struct vs_in {\n"
+                "  float4 pos [[attribute(0)]];\n"
+                "};\n"
+                "struct vs_out {\n"
+                "  float4 pos [[position]];\n"
+                "  float2 uv;\n"
+                "};\n"
+                "vertex vs_out _main(vs_in in[[stage_in]]) {\n"
+                "  vs_out out;\n"
+                "  out.pos = float4((in.pos.xy - 0.5) * float2(2.0, -2.0), 0.0, 1.0);\n"
+                "  out.uv = in.pos.xy;\n"
+                "  return out;\n"
+                "}\n";
+            display_fs_src =
+                "#include <metal_stdlib>\n"
+                "using namespace metal;\n"
+                "struct ps_in {\n"
+                "  float2 uv;\n"
+                "};\n"
+                "fragment float4 _main(ps_in in [[stage_in]],\n"
+                "                      texture2d<float> tex [[texture(0)]],\n"
+                "                      sampler smp [[sampler(0)]])\n"
+                "{\n"
+                "  return tex.sample(smp, in.uv);\n"
+                "}\n";
             break;
         case SG_BACKEND_D3D11:
             offscreen_vs_src =

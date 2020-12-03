@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.0)
 project(pacman)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 11)
+source_group(" " .*)
 
 #=== LIBRARY: sokol
 # add headers to the the file list because they are useful to have in IDEs

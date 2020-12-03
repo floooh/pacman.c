@@ -24,7 +24,8 @@
 #define MAX_VERTICES        (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + 1) * 6)
 #define FADE_TICKS          (30)
 #define MAX_LIVES           (3)
-#define MAX_FRUITS          (7) // max number of displayed fruits at bottom right
+#define MAX_FRUITS          (7)     // max number of displayed fruits at bottom right
+#define MAX_DOTS            (240)   // number of dots on playing field
 
 // some common tile numbers
 #define TILE_DOT        (0x10)
@@ -82,13 +83,66 @@ typedef enum {
     FRUIT_GALAXIAN,
     FRUIT_BELL,
     FRUIT_KEY,
-    FRUIT_NUM,
+    NUM_FRUITS
 } fruit_t;
+
+// sprite indices
+typedef enum {
+    SPRITE_BLINKY,
+    SPRITE_PINKY,
+    SPRITE_INKY,
+    SPRITE_CLYDE,
+    SPRITE_PACMAN,
+    SPRITE_FRUIT,
+} sprite_index_t;
+
+// ghost types
+typedef enum {
+    GHOSTTYPE_BLINKY,
+    GHOSTTYPE_PINKY,
+    GHOSTTYPE_INKY,
+    GHOSTTYPE_CLYDE,
+    NUM_GHOSTS
+} ghostname_t;
+
+// ghost AI states
+typedef enum {
+    GHOSTSTATE_NONE,
+    GHOSTSTATE_CHASE,
+    GHOSTSTATE_SCATTER,
+    GHOSTSTATE_FRIGHTENED,
+    GHOSTSTATE_HOLLOW,
+    GHOSTSTATE_HOUSE,
+    GHOSTSTATE_LEAVEHOUSE,
+    GHOSTSTATE_ENTERHOUSE
+} ghoststate_t;
 
 // a trigger starts an action when a specific game tick is reached
 typedef struct {
     uint32_t tick;
 } trigger_t;
+
+typedef struct { int16_t x, y; } int2_t;
+
+// common state for pacman and ghosts
+typedef struct {
+    bool stopped;
+    dir_t dir;
+    dir_t next_dir;
+    int2_t pos;         // position of midpoint in pixel coords
+} actor_t;
+
+// ghost state
+typedef struct {
+    actor_t actor;
+    int2_t target_pos;
+    ghoststate_t state;
+} ghost_t;
+
+// pacman state
+typedef struct {
+    actor_t actor;
+} pacman_t;
 
 // the tile- and sprite-renderer's vertex structure
 typedef struct {
@@ -102,7 +156,7 @@ typedef struct {
     bool enabled;
     uint8_t tile, color;    // sprite-tile number (0..63), color code
     bool flipx, flipy;
-    int16_t x, y;           // pixel position
+    int2_t pos;
 } sprite_t;
 
 // all state is in a single nested struct
@@ -127,6 +181,9 @@ static struct {
         trigger_t started;
         trigger_t round_started;
         uint8_t lives;
+        uint8_t dot_count;
+        ghost_t ghost[NUM_GHOSTS];
+        pacman_t pacman;
         fruit_t fruits[MAX_FRUITS];
     } game;
 
@@ -237,7 +294,7 @@ static void init(void) {
 }
 
 static void frame(void) {
-    // FIXME: decouple game_tick() from refresh rate
+    // FIXME: decouple pacman_tick() from refresh rate
     pacman_tick();
     gfx_draw();
 }
@@ -330,6 +387,11 @@ static void input_enable(void) {
     state.input.enabled = true;
 }
 
+// convert an actor pos (origin at center) to sprite pos (origin top left)
+static int2_t actor_to_sprite_pos(int2_t pos) {
+    return (int2_t) { pos.x - SPRITE_WIDTH/2, pos.y - SPRITE_HEIGHT/2 };
+}
+
 // clear tile buffer
 static void vid_clear(uint8_t tile_code, uint8_t color_code) {
     memset(&state.gfx.video_ram, tile_code, sizeof(state.gfx.video_ram));
@@ -358,7 +420,7 @@ static void vid_color_tile(uint8_t x, uint8_t y, uint8_t color_code, uint8_t til
 // translate ASCII char into "NAMCO char"
 static char conv_char(char c) {
     switch (c) {
-        case ' ':   c = 64; break;
+        case ' ':   c = 0x40; break;
         case '/':   c = 58; break;
         case '-':   c = 59; break;
         case '\"':  c = 38; break;
@@ -404,15 +466,8 @@ static void spr_clear(void) {
     memset(&state.gfx.sprite, 0, sizeof(state.gfx.sprite));
 }
 
-// initialize a sprite
-static void spr_init(int index, sprite_t sprite) {
-    assert((index >= 0) && (index < NUM_SPRITES));
-    state.gfx.sprite[index] = sprite;
-    state.gfx.sprite[index].enabled = true;
-}
-
 // set sprite to animated pacman
-static void spr_anim_pacman(int index, dir_t dir) {
+static void spr_anim_pacman(int index, dir_t dir, uint32_t tick) {
     assert((index >= 0) && (index < NUM_SPRITES));
     assert((dir >= 0) && (dir < NUM_DIRS));
     // animation frames for horizontal and vertical movement
@@ -422,14 +477,14 @@ static void spr_anim_pacman(int index, dir_t dir) {
     };
 
     sprite_t* spr = &state.gfx.sprite[index];
-    uint32_t phase = (state.tick / 4) & 3;
+    uint32_t phase = (tick / 4) & 3;
     spr->tile  = tiles[dir & 1][phase];
     spr->flipx = (dir == DIR_LEFT);
     spr->flipy = (dir == DIR_UP);
 }
 
 // set sprite to animated ghost
-static void spr_anim_ghost(int index, dir_t dir) {
+static void spr_anim_ghost(int index, dir_t dir, uint32_t tick) {
     assert((index >= 0) && (index < NUM_SPRITES));
     assert((dir >= 0) && (dir < NUM_DIRS));
     static const uint8_t tiles[4][2]  = {
@@ -438,7 +493,7 @@ static void spr_anim_ghost(int index, dir_t dir) {
         { 36, 37 }, // left
         { 38, 39 }, // up
     };
-    uint32_t phase = (state.tick / 4) & 1;
+    uint32_t phase = (tick / 4) & 1;
     sprite_t* spr = &state.gfx.sprite[index];
     spr->tile = tiles[dir][phase];
     spr->flipx = false;
@@ -446,10 +501,10 @@ static void spr_anim_ghost(int index, dir_t dir) {
 }
 
 // set sprite to animated, frightened ghost
-static void spr_anim_ghost_frightened(int index) {
+static void spr_anim_ghost_frightened(int index, uint32_t tick) {
     assert((index >= 0) && (index < NUM_SPRITES));
     static const uint8_t tiles[4] = { 28, 29 };
-    uint32_t phase = (state.tick / 4) & 1;
+    uint32_t phase = (tick / 4) & 1;
     sprite_t* spr = &state.gfx.sprite[index];
     spr->tile = tiles[phase];
     spr->flipx = false;
@@ -559,32 +614,32 @@ static void intro_tick(void) {
         start(&state.intro.chase);
         vid_color_tile(4, 20, 0x10, TILE_PILL);
         int16_t x = 224;
-        spr_init(0, (sprite_t) { .x=x+20, .y=156, .color = COLOR_BLINKY });
-        spr_init(1, (sprite_t) { .x=x+36, .y=156, .color = COLOR_PINKY });
-        spr_init(2, (sprite_t) { .x=x+52, .y=156, .color = COLOR_INKY });
-        spr_init(3, (sprite_t) { .x=x+68, .y=156, .color = COLOR_CLYDE });
-        spr_init(4, (sprite_t) { .x=x,    .y=156, .color = COLOR_PACMAN });
+        state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = true, .pos = { x+20, 156 }, .color = COLOR_BLINKY };
+        state.gfx.sprite[SPRITE_PINKY]  = (sprite_t) { .enabled = true, .pos = { x+36, 156 }, .color = COLOR_PINKY };
+        state.gfx.sprite[SPRITE_INKY]   = (sprite_t) { .enabled = true, .pos = { x+52, 156 }, .color = COLOR_INKY };
+        state.gfx.sprite[SPRITE_CLYDE]  = (sprite_t) { .enabled = true, .pos = { x+68, 156 }, .color = COLOR_CLYDE };
+        state.gfx.sprite[SPRITE_PACMAN] = (sprite_t) { .enabled = true, .pos = { x,    156 }, .color = COLOR_PACMAN };
     }
     // ghosts are chasing pacman...
     if (phase(state.intro.chase, 1, 200)) {
         for (int i = 0; i < 5; i++) {
-            if (i == 4) { spr_anim_pacman(i, DIR_LEFT); }
-            else        { spr_anim_ghost(i, DIR_LEFT); }
-            state.gfx.sprite[i].x--;
+            if (i == SPRITE_PACMAN) { spr_anim_pacman(i, DIR_LEFT, state.tick); }
+            else                    { spr_anim_ghost(i, DIR_LEFT, state.tick); }
+            state.gfx.sprite[i].pos.x--;
         }
     }
     // pacman is chasing and eating ghosts
     if (phase(state.intro.chase, 210, 500)) {
         for (int i = 0; i < 5; i++) {
-            if (i == 4) {
-                spr_anim_pacman(i, DIR_RIGHT);
-                state.gfx.sprite[i].x++;
+            if (i == SPRITE_PACMAN) {
+                spr_anim_pacman(i, DIR_RIGHT, state.tick);
+                state.gfx.sprite[i].pos.x++;
             }
             else {
-                spr_anim_ghost_frightened(i);
+                spr_anim_ghost_frightened(i, state.tick);
                 state.gfx.sprite[i].color = COLOR_FRIGHTENED;
                 if (state.tick & 1) {
-                    state.gfx.sprite[i].x++;
+                    state.gfx.sprite[i].pos.x++;
                 }
             }
         }
@@ -678,13 +733,67 @@ static void game_round_init(void) {
         vid_color_text(9, 14, 0x5, "PLAYER ONE");
         vid_color_text(11, 20, 0x9, "READY!");
     }
+
+    // Pacman starts running to the left
+    state.game.pacman = (pacman_t) {
+        .actor = {
+            .stopped = true,
+            .dir = DIR_LEFT, .next_dir = DIR_LEFT,
+            .pos = { .x = 14 * 8, 26 * 8 + 4 },
+        }
+    };
+    state.gfx.sprite[SPRITE_PACMAN] = (sprite_t) { .enabled=false, .color=COLOR_PACMAN };
+
+    // Blinky starts outside the ghost house, looking to the left, and in scatter mode
+    state.game.ghost[GHOSTTYPE_BLINKY] = (ghost_t) {
+        .actor = {
+            .stopped = true,
+            .dir = DIR_LEFT, .next_dir = DIR_LEFT,
+            .pos = { .x = 14*8, .y = 14*8+4 },
+        },
+        .state = GHOSTSTATE_SCATTER,
+    };
+    state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = false, .color = COLOR_BLINKY };
+
+    // Pinky starts in the middle slot of the ghost house, moving down
+    state.game.ghost[GHOSTTYPE_PINKY] = (ghost_t) {
+        .actor = {
+            .stopped = true,
+            .dir = DIR_DOWN, .next_dir = DIR_DOWN,
+            .pos = { .x = 14*8, .y = 17*8+4 },
+        },
+        .state = GHOSTSTATE_HOUSE,
+    };
+    state.gfx.sprite[SPRITE_PINKY] = (sprite_t) { .enabled = false, .color = COLOR_PINKY };
+
+    // Inky starts in the left slot of the ghost house moving up
+    state.game.ghost[GHOSTTYPE_INKY] = (ghost_t) {
+        .actor = {
+            .stopped = true,
+            .dir = DIR_UP, .next_dir = DIR_UP,
+            .pos = { .x = 12*8, .y = 17*8+4 },
+        },
+        .state = GHOSTSTATE_HOUSE,
+    };
+    state.gfx.sprite[SPRITE_INKY] = (sprite_t) { .enabled = false, .color = COLOR_INKY };
+
+    // Clyde starts in the right slot of the ghost house, moving up
+    state.game.ghost[GHOSTTYPE_CLYDE] = (ghost_t) {
+        .actor = {
+            .stopped = true,
+            .dir = DIR_UP, .next_dir = DIR_UP,
+            .pos = { .x = 16*8, .y=17*8+4 },
+        },
+        .state = GHOSTSTATE_HOUSE
+    };
+    state.gfx.sprite[SPRITE_CLYDE] = (sprite_t) { .enabled = false, .color = COLOR_CLYDE };
 }
 
 /* helper function to draw a tile-quad, arranged as:
     |t+1|t+0|
     |t+3|t+2|
 */
-static void draw_tile_quad(uint8_t x, uint8_t y, uint8_t color_code, uint8_t tile_code) {
+static void game_draw_tile_quad(uint8_t x, uint8_t y, uint8_t color_code, uint8_t tile_code) {
     for (int yy=0; yy<2; yy++) {
         for (int xx=0; xx<2; xx++) {
             uint8_t t = tile_code + yy*2 + (1-xx);
@@ -694,14 +803,14 @@ static void draw_tile_quad(uint8_t x, uint8_t y, uint8_t color_code, uint8_t til
 }
 
 // draw all the off-playfield status information
-static void draw_status(void) {
+static void game_draw_status(void) {
     // lives at bottom left screen
     for (int i = 0; i < MAX_LIVES; i++) {
         uint8_t color = (i < state.game.lives) ? COLOR_PACMAN : 0;
-        draw_tile_quad(2+2*i, 34, color, TILE_LIFE);
+        game_draw_tile_quad(2+2*i, 34, color, TILE_LIFE);
     }
     // draw fruit table
-    uint8_t fruit_tiles_colors[FRUIT_NUM][2] = {
+    uint8_t fruit_tiles_colors[NUM_FRUITS][2] = {
         { 0, 0 },   // FRUIT_NONE
         { TILE_CHERRIES, COLOR_CHERRIES },
         { TILE_STRAWBERRY, COLOR_STRAWBERRY },
@@ -715,8 +824,45 @@ static void draw_status(void) {
     for (int i = 0; i < MAX_FRUITS; i++) {
         uint8_t tile_code = fruit_tiles_colors[state.game.fruits[i]][0];
         uint8_t color_code = fruit_tiles_colors[state.game.fruits[i]][1];
-        draw_tile_quad(24-2*i, 34, color_code, tile_code);
+        game_draw_tile_quad(24-2*i, 34, color_code, tile_code);
     }
+}
+
+static void game_update_sprites(void) {
+    // update Pacman sprite
+    if (state.gfx.sprite[SPRITE_PACMAN].enabled) {
+        const actor_t* actor = &state.game.pacman.actor;
+        state.gfx.sprite[SPRITE_PACMAN].pos = actor_to_sprite_pos(actor->pos);
+        if (actor->stopped) {
+            state.gfx.sprite[SPRITE_PACMAN].tile = 48;
+        }
+        else {
+            spr_anim_pacman(SPRITE_PACMAN, actor->dir, state.tick);
+        }
+    }
+
+    // update ghost sprites
+    for (int i = 0; i < NUM_GHOSTS; i++) {
+        if (state.gfx.sprite[i].enabled) {
+            const ghost_t* ghost = &state.game.ghost[i];
+            state.gfx.sprite[i].pos = actor_to_sprite_pos(ghost->actor.pos);
+            uint32_t tick = ghost->actor.stopped ? 0 : state.tick;
+            switch (ghost->state) {
+                case GHOSTSTATE_HOLLOW:
+                    // FIXME!
+                    spr_anim_ghost_frightened(i, tick);
+                    break;
+                case GHOSTSTATE_FRIGHTENED:
+                    spr_anim_ghost_frightened(i, tick);
+                    break;
+                default:
+                    spr_anim_ghost(i, ghost->actor.dir, tick);
+                    break;
+            }
+        }
+    }
+
+    // FIXME: update fruit sprite
 }
 
 static void game_tick(void) {
@@ -725,6 +871,7 @@ static void game_tick(void) {
         start(&state.gfx.fadein);
         start(&state.game.round_started);
         state.game.lives = MAX_LIVES;
+        state.game.dot_count = MAX_DOTS;
         for (int i = 0; i < MAX_FRUITS; i++) {
             state.game.fruits[i] = (i==0) ? FRUIT_CHERRIES:FRUIT_NONE;
         }
@@ -734,8 +881,27 @@ static void game_tick(void) {
         input_enable();
         game_round_init();
     }
+    // after 3 seconds, make actors visible, remove "PLAYER ONE"
+    if (after(state.game.round_started, 3*60)) {
+        vid_color_text(9, 14, 0x10, "          ");
+        for (int i = 0; i < NUM_GHOSTS+1; i++) {
+            state.gfx.sprite[i].enabled = true;
+        }
+    }
+    // after 5 seconds, make actors active, remove "READY!"
+    if (after(state.game.round_started, 5*60)) {
+        vid_color_text(11, 20, 0x10, "      ");
+        state.game.pacman.actor.stopped = false;
+        for (int i = 0; i < NUM_GHOSTS; i++) {
+            state.game.ghost[i].actor.stopped = false;
+        }
+    }
+
     // draw off-playfield status
-    draw_status();
+    game_draw_status();
+
+    // update sprite positions and images
+    game_update_sprites();
 
     if (state.input.any) {
         input_disable();
@@ -1160,19 +1326,19 @@ static void gfx_add_sprite_vertices(void) {
         if (spr->enabled) {
             float x0, x1, y0, y1;
             if (spr->flipx) {
-                x1 = spr->x * dx;
+                x1 = spr->pos.x * dx;
                 x0 = x1 + dx * SPRITE_WIDTH;
             }
             else {
-                x0 = spr->x * dx;
+                x0 = spr->pos.x * dx;
                 x1 = x0 + dx * SPRITE_WIDTH;
             }
             if (spr->flipy) {
-                y1 = spr->y * dy;
+                y1 = spr->pos.y * dy;
                 y0 = y1 + dy * SPRITE_HEIGHT;
             }
             else {
-                y0 = spr->y * dy;
+                y0 = spr->pos.y * dy;
                 y1 = y0 + dy * SPRITE_HEIGHT;
             }
             const float u0 = spr->tile * du;

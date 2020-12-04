@@ -12,7 +12,7 @@
 // constants and types
 #define TILE_WIDTH          (8)
 #define TILE_HEIGHT         (8)
-#define TILE_MID_X          (3) // not a bug
+#define TILE_MID_X          (4)
 #define TILE_MID_Y          (4)
 #define SPRITE_WIDTH        (16)
 #define SPRITE_HEIGHT       (16)

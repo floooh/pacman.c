@@ -12,6 +12,8 @@
 // constants and types
 #define TILE_WIDTH          (8)
 #define TILE_HEIGHT         (8)
+#define TILE_MID_X          (3) // not a bug
+#define TILE_MID_Y          (4)
 #define SPRITE_WIDTH        (16)
 #define SPRITE_HEIGHT       (16)
 #define DISPLAY_TILES_X     (28)
@@ -29,6 +31,7 @@
 #define NUM_PILLS           (4)     // number of energizer pills
 
 // some common tile numbers
+#define TILE_SPACE      (0x40)
 #define TILE_DOT        (0x10)
 #define TILE_PILL       (0x14)
 #define TILE_GHOST      (0xB0)
@@ -41,6 +44,7 @@
 #define TILE_GRAPES     (0xA4)      // 0xA4..0xA7
 #define TILE_GALAXIAN   (0xA8)      // 0xA8..0xAB
 #define TILE_KEY        (0xAC)      // 0xAC..0xAF
+#define TILE_DOOR       (0xCF)      // the ghost-house door
 
 // some common color codes
 #define COLOR_PACMAN        (9)
@@ -66,10 +70,10 @@ typedef enum {
 
 // directions NOTE: bit0==0: horizontal movement, bit0==1: vertical movement
 typedef enum {
-    DIR_RIGHT,  // 00
-    DIR_DOWN,   // 01
-    DIR_LEFT,   // 10
-    DIR_UP,     // 11
+    DIR_RIGHT,  // 000
+    DIR_DOWN,   // 001
+    DIR_LEFT,   // 010
+    DIR_UP,     // 011
     NUM_DIRS
 } dir_t;
 
@@ -128,13 +132,14 @@ typedef struct { int16_t x, y; } int2_t;
 // common state for pacman and ghosts
 typedef struct {
     dir_t dir;
-    dir_t next_dir;
-    int2_t pos;         // position of midpoint in pixel coords
+    int2_t pos;             // position of midpoint in pixel coords
+    uint32_t move_tick;     // incremented when actor moved in current tick
 } actor_t;
 
 // ghost state
 typedef struct {
     actor_t actor;
+    dir_t next_dir;
     int2_t target_pos;
     ghoststate_t state;
 } ghost_t;
@@ -481,7 +486,6 @@ static void spr_clear(void) {
 // set sprite to animated pacman
 static void spr_anim_pacman(int index, dir_t dir, uint32_t tick) {
     assert((index >= 0) && (index < NUM_SPRITES));
-    assert((dir >= 0) && (dir < NUM_DIRS));
     // animation frames for horizontal and vertical movement
     static const uint8_t tiles[2][4] = {
         { 44, 46, 48, 46 }, // horizontal (needs flipx)
@@ -505,7 +509,7 @@ static void spr_anim_ghost(int index, dir_t dir, uint32_t tick) {
         { 36, 37 }, // left
         { 38, 39 }, // up
     };
-    uint32_t phase = (tick / 4) & 1;
+    uint32_t phase = (tick / 8) & 1;
     sprite_t* spr = &state.gfx.sprite[index];
     spr->tile = tiles[dir][phase];
     spr->flipx = false;
@@ -521,6 +525,49 @@ static void spr_anim_ghost_frightened(int index, uint32_t tick) {
     spr->tile = tiles[phase];
     spr->flipx = false;
     spr->flipy = false;
+}
+
+// convert pixel position to clamped tile position
+static int2_t pixel_to_tile_pos(int2_t pix_pos) {
+    return (int2_t) { pix_pos.x / TILE_WIDTH, pix_pos.y / TILE_HEIGHT };
+}
+
+static int2_t clamped_tile_pos(int2_t tile_pos) {
+    int2_t res = tile_pos;
+    if (res.x < 0) {
+        res.x = 0;
+    }
+    else if (res.x >= DISPLAY_TILES_X) {
+        res.x = DISPLAY_TILES_X - 1;
+    }
+    if (res.y < 0) {
+        res.y = 0;
+    }
+    else if (res.y >= DISPLAY_TILES_Y) {
+        res.y = DISPLAY_TILES_Y - 1;
+    }
+    return res;
+}
+
+static int2_t dir_to_vec(dir_t dir) {
+    assert((dir >= 0) && (dir < NUM_DIRS));
+    static const int2_t dir_map[NUM_DIRS] = { { +1, 0 }, { 0, +1 }, { -1, 0 }, { 0, -1 } };
+    return dir_map[dir];
+}
+
+static bool is_blocking_tile(int2_t pos, bool allow_door) {
+    assert((pos.x >= 0) && (pos.x < DISPLAY_TILES_X));
+    assert((pos.y >= 0) && (pos.y < DISPLAY_TILES_Y));
+    const uint8_t tile_code = state.gfx.video_ram[pos.y][pos.x];
+    if ((tile_code == TILE_DOT) || (tile_code == TILE_PILL) || (tile_code == TILE_SPACE)) {
+        return false;
+    }
+    else if (allow_door && (tile_code == TILE_DOOR)) {
+        return false;
+    }
+    else {
+        return true;
+    }
 }
 
 /*== TOP-LEVEL GAME CODE =====================================================*/
@@ -669,6 +716,7 @@ static void intro_tick(void) {
 static void hiscore_tick(void) {
     if (now(state.hiscore.started)) {
         start(&state.gfx.fadein);
+        spr_clear();
         input_enable();
         vid_clear(0x40, 0xF);
         vid_text(7, 16, "HISCORE TODO!");
@@ -746,7 +794,7 @@ static void game_round_init(void) {
         t['g']=0xEB; t['h']=0xEA; t['l']=0xE8; t['r']=0xE9; t['u']=0xE5; t['w']=0xF5;
         t['x']=0xF2; t['y']=0xF3; t['z']=0xF4; t['m']=0xED; t['n']=0xEC; t['o']=0xEF;
         t['p']=0xEE; t['j']=0xDD; t['i']=0xD2; t['k']=0xDB; t['q']=0xD3; t['s']=0xF1;
-        t['t']=0xF0; t['-']=0xCF; 
+        t['t']=0xF0; t['-']=TILE_DOOR;
         for (int y = 3, i = 0; y <= 33; y++) {
             for (int x = 0; x < 28; x++, i++) {
                 state.gfx.video_ram[y][x] = t[tiles[i] & 127];
@@ -762,7 +810,7 @@ static void game_round_init(void) {
     // Pacman starts running to the left
     state.game.pacman = (pacman_t) {
         .actor = {
-            .dir = DIR_LEFT, .next_dir = DIR_LEFT,
+            .dir = DIR_LEFT, 
             .pos = { .x = 14 * 8, 26 * 8 + 4 },
         }
     };
@@ -771,9 +819,10 @@ static void game_round_init(void) {
     // Blinky starts outside the ghost house, looking to the left, and in scatter mode
     state.game.ghost[GHOSTTYPE_BLINKY] = (ghost_t) {
         .actor = {
-            .dir = DIR_LEFT, .next_dir = DIR_LEFT,
+            .dir = DIR_LEFT,
             .pos = { .x = 14*8, .y = 14*8+4 },
         },
+        .next_dir = DIR_LEFT,
         .state = GHOSTSTATE_SCATTER,
     };
     state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = false, .color = COLOR_BLINKY };
@@ -781,9 +830,10 @@ static void game_round_init(void) {
     // Pinky starts in the middle slot of the ghost house, moving down
     state.game.ghost[GHOSTTYPE_PINKY] = (ghost_t) {
         .actor = {
-            .dir = DIR_DOWN, .next_dir = DIR_DOWN,
+            .dir = DIR_DOWN,
             .pos = { .x = 14*8, .y = 17*8+4 },
         },
+        .next_dir = DIR_DOWN,
         .state = GHOSTSTATE_HOUSE,
     };
     state.gfx.sprite[SPRITE_PINKY] = (sprite_t) { .enabled = false, .color = COLOR_PINKY };
@@ -791,9 +841,10 @@ static void game_round_init(void) {
     // Inky starts in the left slot of the ghost house moving up
     state.game.ghost[GHOSTTYPE_INKY] = (ghost_t) {
         .actor = {
-            .dir = DIR_UP, .next_dir = DIR_UP,
+            .dir = DIR_UP,
             .pos = { .x = 12*8, .y = 17*8+4 },
         },
+        .next_dir = DIR_UP,
         .state = GHOSTSTATE_HOUSE,
     };
     state.gfx.sprite[SPRITE_INKY] = (sprite_t) { .enabled = false, .color = COLOR_INKY };
@@ -801,9 +852,10 @@ static void game_round_init(void) {
     // Clyde starts in the right slot of the ghost house, moving up
     state.game.ghost[GHOSTTYPE_CLYDE] = (ghost_t) {
         .actor = {
-            .dir = DIR_UP, .next_dir = DIR_UP,
+            .dir = DIR_UP,
             .pos = { .x = 16*8, .y=17*8+4 },
         },
+        .next_dir = DIR_UP, 
         .state = GHOSTSTATE_HOUSE
     };
     state.gfx.sprite[SPRITE_CLYDE] = (sprite_t) { .enabled = false, .color = COLOR_CLYDE };
@@ -877,7 +929,7 @@ static void game_update_sprites(void) {
             state.gfx.sprite[SPRITE_PACMAN].tile = 48;
         }
         else {
-            spr_anim_pacman(SPRITE_PACMAN, actor->dir, state.tick);
+            spr_anim_pacman(SPRITE_PACMAN, actor->dir, actor->move_tick);
         }
     }
 
@@ -886,23 +938,131 @@ static void game_update_sprites(void) {
         if (state.gfx.sprite[i].enabled) {
             const ghost_t* ghost = &state.game.ghost[i];
             state.gfx.sprite[i].pos = actor_to_sprite_pos(ghost->actor.pos);
-            uint32_t tick = state.game.frozen ? 0 : state.tick;
             switch (ghost->state) {
                 case GHOSTSTATE_HOLLOW:
                     // FIXME!
-                    spr_anim_ghost_frightened(i, tick);
+                    spr_anim_ghost_frightened(i, ghost->actor.move_tick);
                     break;
                 case GHOSTSTATE_FRIGHTENED:
-                    spr_anim_ghost_frightened(i, tick);
+                    spr_anim_ghost_frightened(i, ghost->actor.move_tick);
                     break;
                 default:
-                    spr_anim_ghost(i, ghost->actor.dir, tick);
+                    // NOTE: ghost always indicate early what direction they're going:
+                    spr_anim_ghost(i, ghost->next_dir, ghost->actor.move_tick);
                     break;
             }
         }
     }
 
     // FIXME: update fruit sprite
+}
+
+// get the current input as dir_t
+static dir_t game_input_dir(void) {
+    if (state.input.up) {
+        return DIR_UP;
+    }
+    else if (state.input.down) {
+        return DIR_DOWN;
+    }
+    else if (state.input.right) {
+        return DIR_RIGHT;
+    }
+    else if (state.input.left) {
+        return DIR_LEFT;
+    }
+    else {
+        return state.game.pacman.actor.dir;
+    }
+}
+
+// pixel distance to the actor's current tile position
+int2_t actor_dist_to_mid(const actor_t* actor) {
+    return (int2_t) {
+        TILE_MID_X - actor->pos.x % TILE_WIDTH,
+        TILE_MID_Y - actor->pos.y % TILE_HEIGHT
+    };
+}
+
+bool actor_can_move(const actor_t* actor, dir_t wanted_dir, bool allow_cornering, bool allow_door) {
+    const int2_t dir_vec = dir_to_vec(wanted_dir);
+    const int2_t dist_to_mid = actor_dist_to_mid(actor);
+    
+    // distance to midpoint in move direction and perpendicular direction
+    int16_t move_dist_to_mid, perp_dist_to_mid;
+    if (dir_vec.y != 0) {
+        move_dist_to_mid = dist_to_mid.y;
+        perp_dist_to_mid = dist_to_mid.x;
+    }
+    else {
+        move_dist_to_mid = dist_to_mid.x;
+        perp_dist_to_mid = dist_to_mid.y;
+    }
+    
+    // look one tile ahead in movement direction
+    const int2_t tile_pos = pixel_to_tile_pos(actor->pos);
+    const int2_t check_pos = clamped_tile_pos((int2_t) { tile_pos.x + dir_vec.x, tile_pos.y + dir_vec.y });
+    const bool is_blocked = is_blocking_tile(check_pos, allow_door);
+    if ((!allow_cornering && (0 != perp_dist_to_mid)) || (is_blocked && (0 == move_dist_to_mid))) {
+        // way is blocked
+        return false;
+    }
+    else {
+        // way is free
+        return true;
+    }
+}
+
+static void actor_move(actor_t* actor, bool allow_cornering, bool allow_door) {
+    // only move if the way isn't blocked
+    if (actor_can_move(actor, actor->dir, allow_cornering, allow_door)) {
+        const int2_t dir_vec = dir_to_vec(actor->dir);
+        actor->move_tick++;
+        actor->pos.x += dir_vec.x;
+        actor->pos.y += dir_vec.y;
+
+        // if cornering is allowed, drag the actor towards the center-line
+        if (allow_cornering) {
+            const int2_t dist_to_mid = actor_dist_to_mid(actor);
+            if (dir_vec.x != 0) {
+                if (dist_to_mid.y < 0)      { actor->pos.y--; }
+                else if (dist_to_mid.y > 0) { actor->pos.y++; }
+            }
+            else if (dir_vec.y != 0) {
+                if (dist_to_mid.x < 0)      { actor->pos.x--; }
+                else if (dist_to_mid.x > 0) { actor->pos.x++; }
+            }
+        }
+    }
+    
+    // FIXME: wrap around for teleport
+    if (actor->pos.x < 0) {
+        actor->pos.x = DISPLAY_PIXELS_X - 1;
+    }
+    else if (actor->pos.x > DISPLAY_PIXELS_X) {
+        actor->pos.x = 0;
+    }
+}
+
+static void game_update_actors(void) {
+    // FIXME: check if the next ghost is forced out of the house
+
+    // Pacman movement
+    {
+        // FIXME: for now hardwire to 80% speed (skip every 5th frame), this needs to be looked up in a table
+        if (0 != (state.tick % 5)) {
+            // move Pacman with cornering allowed
+            actor_t* actor = &state.game.pacman.actor;
+            const dir_t wanted_dir = game_input_dir();
+            const bool allow_cornering = true;
+            const bool allow_door = false;
+            // change direction to wanted_dir only if not blocked
+            if (actor_can_move(actor, wanted_dir, allow_cornering, allow_door)) {
+                actor->dir = wanted_dir;
+            }
+            actor_move(actor, allow_cornering, allow_door);
+        }
+    }
 }
 
 static void game_tick(void) {
@@ -930,6 +1090,9 @@ static void game_tick(void) {
         vid_color_text(11, 20, 0x10, "      ");
     }
     
+    if (!state.game.frozen) {
+        game_update_actors();
+    }
     game_update_tiles();
     game_update_sprites();
 

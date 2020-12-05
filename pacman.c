@@ -10,8 +10,8 @@
 #include <string.h> // memset()
 
 // debug options for skipping intro screen and game-loop prelude
-#define DBG_SKIP_INTRO      (1)
-#define DBG_SKIP_PRELUDE    (1)
+#define DBG_SKIP_INTRO      (0)
+#define DBG_SKIP_PRELUDE    (0)
 
 // various constants
 enum {
@@ -30,7 +30,7 @@ enum {
     FADE_TICKS          = 30,       // duration of fade-in/out
     NUM_LIVES           = 3,
     NUM_STATUS_FRUITS   = 7,    // max number of displayed fruits at bottom right
-    NUM_DOTS            = 240,  // number of dots on playfield
+    NUM_DOTS            = 244,  // 240 small dots + 4 pills
     NUM_PILLS           = 4,    // number of energizer pills on playfield
 };
 
@@ -165,12 +165,6 @@ typedef struct {
     actor_t actor;
 } pacman_t;
 
-// energizer pill state
-typedef struct {
-    bool enabled;
-    int2_t pos;
-} pill_t;
-
 // the tile- and sprite-renderer's vertex structure
 typedef struct {
     float x, y;         // screen coords [0..1] as FLOAT2
@@ -208,13 +202,12 @@ static struct {
         timer_t started;
         timer_t round_started;
         bool frozen;        // if true the game is currently 'frozen'
-        uint32_t score;
-        uint32_t hiscore;
+        uint32_t score;     // score / 10
+        uint32_t hiscore;   // hiscore / 10
         uint8_t lives;
-        uint8_t dot_count;
+        uint8_t dots_eaten;
         ghost_t ghost[NUM_GHOSTS];
         pacman_t pacman;
-        pill_t pill[NUM_PILLS];
         fruit_t fruit[NUM_STATUS_FRUITS];
     } game;
 
@@ -467,25 +460,25 @@ static void vid_clear(uint8_t tile_code, uint8_t color_code) {
 }
 
 // check if a tile position is valid
-static bool tile_pos_valid(int2_t tile_pos) {
+static bool valid_tile_pos(int2_t tile_pos) {
     return ((tile_pos.x >= 0) && (tile_pos.x < DISPLAY_TILES_X) && (tile_pos.y >= 0) && (tile_pos.y < DISPLAY_TILES_Y));
 }
 
 // put a color into the color buffer
 static void vid_color(int2_t tile_pos, uint8_t color_code) {
-    assert(tile_pos_valid(tile_pos));
+    assert(valid_tile_pos(tile_pos));
     state.gfx.color_ram[tile_pos.y][tile_pos.x] = color_code;
 }
 
 // put a tile into the tile buffer
 static void vid_tile(int2_t tile_pos, uint8_t tile_code) {
-    assert(tile_pos_valid(tile_pos));
+    assert(valid_tile_pos(tile_pos));
     state.gfx.video_ram[tile_pos.y][tile_pos.x] = tile_code;
 }
 
 // put a colored tile into the tile buffer
 static void vid_color_tile(int2_t tile_pos, uint8_t color_code, uint8_t tile_code) {
-    assert(tile_pos_valid(tile_pos));
+    assert(valid_tile_pos(tile_pos));
     state.gfx.video_ram[tile_pos.y][tile_pos.x] = tile_code;
     state.gfx.color_ram[tile_pos.y][tile_pos.x] = color_code;
 }
@@ -503,14 +496,26 @@ static char conv_char(char c) {
     return c;
 }
 
+// put char with color into tile buffer
+static void vid_color_char(int2_t tile_pos, uint8_t color_code, char chr) {
+    assert(valid_tile_pos(tile_pos));
+    state.gfx.video_ram[tile_pos.y][tile_pos.x] = conv_char(chr);
+    state.gfx.color_ram[tile_pos.y][tile_pos.x] = color_code;
+}
+
+// put char without color into tile buffer
+static void vid_char(int2_t tile_pos, char chr) {
+    assert(valid_tile_pos(tile_pos));
+    state.gfx.video_ram[tile_pos.y][tile_pos.x] = conv_char(chr);
+}
+
 // put colored text into the tile buffer
 static void vid_color_text(int2_t tile_pos, uint8_t color_code, const char* text) {
-    assert(tile_pos_valid(tile_pos));
+    assert(valid_tile_pos(tile_pos));
     uint8_t chr;
     while ((chr = (uint8_t) *text++)) {
         if (tile_pos.x < DISPLAY_TILES_X) {
-            state.gfx.video_ram[tile_pos.y][tile_pos.x] = conv_char(chr);
-            state.gfx.color_ram[tile_pos.y][tile_pos.x] = color_code;
+            vid_color_char(tile_pos, color_code, chr);
             tile_pos.x++;
         }
         else {
@@ -521,15 +526,36 @@ static void vid_color_text(int2_t tile_pos, uint8_t color_code, const char* text
 
 // put text without color into the tile buffer
 static void vid_text(int2_t tile_pos, const char* text) {
-    assert(tile_pos_valid(tile_pos));
+    assert(valid_tile_pos(tile_pos));
     uint8_t chr;
     while ((chr = (uint8_t) *text++)) {
         if (tile_pos.x < DISPLAY_TILES_X) {
-            state.gfx.video_ram[tile_pos.y][tile_pos.x] = conv_char(chr);
+            vid_char(tile_pos, chr);
             tile_pos.x++;
         }
         else {
             break;
+        }
+    }
+}
+
+/* print score number into tile buffer from right to left(!),
+    scores are /10, the last printed number is always 0, 
+    a zero-score will print as '00' (this is the same as on
+    the Pacman arcade machine)
+*/
+static void vid_color_score(int2_t tile_pos, uint8_t color_code, uint32_t score) {
+    vid_color_char(tile_pos, color_code, '0');
+    tile_pos.x--;
+    for (int digit = 0; digit < 8; digit++) {
+        char chr = (score % 10) + '0';
+        if (valid_tile_pos(tile_pos)) {
+            vid_color_char(tile_pos, color_code, chr);
+            tile_pos.x--;
+            score /= 10;
+            if (0 == score) {
+                break;
+            }
         }
     }
 }
@@ -653,6 +679,11 @@ static bool is_dot(int2_t tile_pos) {
     return tile_code_at(tile_pos) == TILE_DOT;
 }
 
+// check if a tile position contains a pill tile
+static bool is_pill(int2_t tile_pos) {
+    return tile_code_at(tile_pos) == TILE_PILL;
+}
+
 // test if movement from a pixel position in a wanted direction is possible 
 bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering, bool allow_door) {
     const int2_t dir_vec = dir_to_vec(wanted_dir);
@@ -751,7 +782,10 @@ static void intro_tick(void) {
         input_enable();
         vid_clear(TILE_SPACE, COLOR_DEFAULT);
         vid_text(i2(3,0),  "1UP   HIGH SCORE   2UP");
-        vid_text(i2(5,1),  "00");
+        vid_color_score(i2(6,1), COLOR_DEFAULT, 0);
+        if (state.game.hiscore > 0) {
+            vid_color_score(i2(16,1), COLOR_DEFAULT, state.game.hiscore);
+        }
         vid_text(i2(7,5),  "CHARACTER / NICKNAME");
         vid_text(i2(3,35), "CREDIT  0");
         spr_clear();
@@ -857,7 +891,7 @@ static void hiscore_tick(void) {
         start(&state.gfx.fadein);
         spr_clear();
         input_enable();
-        vid_clear(0x40, 0xF);
+        vid_clear(TILE_SPACE, COLOR_DEFAULT);
         vid_text(i2(7,16), "HISCORE TODO!");
     }
     if (state.input.anykey) {
@@ -875,7 +909,7 @@ static void game_init(void) {
     state.game.frozen = true;
     state.game.lives = NUM_LIVES;
     state.game.score = 0;
-    state.game.dot_count = NUM_DOTS;
+    state.game.dots_eaten = 0;
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
         state.game.fruit[i] = (i==0) ? FRUITTYPE_CHERRIES:FRUITTYPE_NONE;
     }
@@ -888,8 +922,7 @@ static void game_round_init(void) {
     // draw the playfield
     {
         vid_clear(TILE_SPACE, COLOR_DOT);
-        vid_color_text(i2(9,0), 0xF, "HIGH SCORE");
-        vid_color_text(i2(5,1), 0xF, "00");
+        vid_color_text(i2(9,0), COLOR_DEFAULT, "HIGH SCORE");
 
         // decode the playfield from an ASCII map into tiles codes
         static const char* tiles =
@@ -897,7 +930,7 @@ static void game_round_init(void) {
             "0UUUUUUUUUUUU45UUUUUUUUUUUU1" // 3
             "L............rl............R" // 4
             "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 5
-            "L r  l.r   l.rl.r   l.r  l R" // 6
+            "LPr  l.r   l.rl.r   l.r  lPR" // 6
             "L.guuh.guuuh.gh.guuuh.guuh.R" // 7
             "L..........................R" // 8
             "L.ebbf.ef.ebbbbbbf.ef.ebbf.R" // 9
@@ -917,7 +950,7 @@ static void game_round_init(void) {
             "L............rl............R" // 23
             "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 24
             "L.guyl.guuuh.gh.guuuh.rxuh.R" // 25
-            "L ..rl.......  .......rl.. R" // 26
+            "LP..rl.......  .......rl..PR" // 26
             "6bf.rl.ef.ebbbbbbf.ef.rl.eb8" // 27
             "7uh.gh.rl.guuyxuuh.rl.gh.gu9" // 28
             "L......rl....rl....rl......R" // 29
@@ -934,7 +967,7 @@ static void game_round_init(void) {
         t['g']=0xEB; t['h']=0xEA; t['l']=0xE8; t['r']=0xE9; t['u']=0xE5; t['w']=0xF5;
         t['x']=0xF2; t['y']=0xF3; t['z']=0xF4; t['m']=0xED; t['n']=0xEC; t['o']=0xEF;
         t['p']=0xEE; t['j']=0xDD; t['i']=0xD2; t['k']=0xDB; t['q']=0xD3; t['s']=0xF1;
-        t['t']=0xF0; t['-']=TILE_DOOR;
+        t['t']=0xF0; t['-']=TILE_DOOR; t['P']=TILE_PILL;
         for (int y = 3, i = 0; y <= 33; y++) {
             for (int x = 0; x < 28; x++, i++) {
                 state.gfx.video_ram[y][x] = t[tiles[i] & 127];
@@ -999,27 +1032,23 @@ static void game_round_init(void) {
         .state = GHOSTSTATE_HOUSE
     };
     state.gfx.sprite[SPRITE_CLYDE] = (sprite_t) { .enabled = false, .color = COLOR_CLYDE };
-    
-    // setup the energizer pills
-    int2_t pill_pos[NUM_PILLS] = { { 1, 6 }, { 26, 6 }, { 1, 26 }, { 26, 26 } };
-    for (int i = 0; i < NUM_PILLS; i++) {
-        state.game.pill[i] = (pill_t) { .enabled = true, .pos = pill_pos[i] };
-    }
 }
 
 static void game_update_tiles(void) {
+    // score and hiscore
+    vid_color_score(i2(6,1), COLOR_DEFAULT, state.game.score);
+    if (state.game.hiscore > 0) {
+        vid_color_score(i2(16,1), COLOR_DEFAULT, state.game.hiscore);
+    }
+
+    // update the energizer pill colors (blinking/non-blinking)
+    static const int2_t pill_pos[NUM_PILLS] = { { 1, 6 }, { 26, 6 }, { 1, 26 }, { 26, 26 } };
     for (int i = 0; i < NUM_PILLS; i++) {
-        int2_t pos = state.game.pill[i].pos;
         if (state.game.frozen) {
-            vid_color_tile(pos, COLOR_DOT, TILE_PILL);
-        }
-        else if (state.game.pill[i].enabled) {
-            // blinking
-            vid_color(pos, (state.tick & 0x8) ? 0x10:0);
+            vid_color(pill_pos[i], COLOR_DOT);
         }
         else {
-            // pill has been eaten: render it black
-            vid_color(pos, 0);
+            vid_color(pill_pos[i], (state.tick & 0x8) ? 0x10:0);
         }
     }
 
@@ -1104,6 +1133,18 @@ static void game_update_actors(void) {
             actor->pos = move(actor->pos, actor->dir, allow_cornering, allow_door);
             actor->anim_tick++;
         }
+        // eat dot or energizer pill?
+        const int2_t tile_pos = pixel_to_tile_pos(actor->pos);
+        if (is_dot(tile_pos)) {
+            vid_tile(tile_pos, TILE_SPACE);
+            state.game.score += 1;
+            state.game.dots_eaten++;
+        }
+        if (is_pill(tile_pos)) {
+            vid_tile(tile_pos, TILE_SPACE);
+            state.game.score += 5;
+            state.game.dots_eaten++;
+        }
     }
 }
 
@@ -1130,6 +1171,9 @@ static void game_tick(void) {
         for (int i = 0; i < NUM_GHOSTS+1; i++) {
             state.gfx.sprite[i].enabled = true;
         }
+        if (NUM_LIVES == state.game.lives) {
+            state.game.lives = NUM_LIVES - 1;
+        }
     }
     // after 5 seconds, the interactive game starts
     if (after(state.game.round_started, 5*ticks_per_sec)) {
@@ -1143,6 +1187,11 @@ static void game_tick(void) {
     }
     game_update_tiles();
     game_update_sprites();
+
+    // update hiscore
+    if (state.game.score > state.game.hiscore) {
+        state.game.hiscore = state.game.score;
+    }
 
     if (state.input.esc) {
         input_disable();

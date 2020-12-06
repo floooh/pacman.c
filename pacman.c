@@ -121,7 +121,7 @@ typedef enum {
     GHOSTTYPE_INKY,
     GHOSTTYPE_CLYDE,
     NUM_GHOSTS
-} ghostname_t;
+} ghosttype_t;
 
 // ghost AI states
 typedef enum {
@@ -156,6 +156,7 @@ typedef struct {
 // ghost state
 typedef struct {
     actor_t actor;
+    ghosttype_t type;
     dir_t next_dir;
     int2_t target_pos;
     ghoststate_t state;
@@ -204,13 +205,13 @@ static struct {
     // game state
     struct {
         timer_t started;
+        timer_t prelude_started;
         timer_t round_started;
-        bool frozen;        // if true the game is currently 'frozen'
-        uint32_t score;     // score / 10
-        uint32_t hiscore;   // hiscore / 10
+        bool frozen;            // if true the game is currently 'frozen'
+        uint32_t score;         // score / 10
+        uint32_t hiscore;       // hiscore / 10
         uint8_t num_lives;
         uint8_t num_dots_eaten;
-        ghoststate_t scatter_or_chase;  // flips between scatter and chase state
         ghost_t ghost[NUM_GHOSTS];
         pacman_t pacman;
         fruit_t fruit[NUM_STATUS_FRUITS];
@@ -451,6 +452,17 @@ static dir_t input_dir(dir_t default_dir) {
 // shortcut to create an int2_t
 static int2_t i2(int16_t x, int16_t y) {
     return (int2_t) { x, y };
+}
+
+// add two int2_t
+static int2_t add_i2(int2_t v0, int2_t v1) {
+    return (int2_t) { v0.x+v1.x, v0.y+v1.y };
+}
+
+// squared-distance between two int2_t
+static int32_t squared_distance_i2(int2_t v0, int2_t v1) {
+    int2_t d = { v1.x - v0.x, v1.y - v0.y };
+    return d.x * d.x + d.y * d.y;
 }
 
 // convert an actor pos (origin at center) to sprite pos (origin top left)
@@ -742,8 +754,7 @@ bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering, bool allow_doo
 // compute a new pixel position along a direction (without blocking check!)
 static int2_t move(int2_t pos, dir_t dir, bool allow_cornering, bool allow_door) {
     const int2_t dir_vec = dir_to_vec(dir);
-    pos.x += dir_vec.x;
-    pos.y += dir_vec.y;
+    pos = add_i2(pos, dir_vec);
 
     // if cornering is allowed, drag the position towards the center-line
     if (allow_cornering) {
@@ -1005,9 +1016,6 @@ static void game_round_init(void) {
         vid_color_text(i2(11, 20), 0x9, "READY!");
     }
 
-    // global state
-    state.game.scatter_or_chase = GHOSTSTATE_SCATTER;
-
     // Pacman starts running to the left
     state.game.pacman = (pacman_t) {
         .actor = {
@@ -1025,6 +1033,7 @@ static void game_round_init(void) {
             .dir = DIR_LEFT,
             .pos = { .x = 14*8, .y = 14*8+4 },
         },
+        .type = GHOSTTYPE_BLINKY,
         .next_dir = DIR_LEFT,
         .state = GHOSTSTATE_SCATTER,
         .frightened = disabled_timer(),
@@ -1037,6 +1046,7 @@ static void game_round_init(void) {
             .dir = DIR_DOWN,
             .pos = { .x = 14*8, .y = 17*8+4 },
         },
+        .type = GHOSTTYPE_PINKY,
         .next_dir = DIR_DOWN,
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
@@ -1049,6 +1059,7 @@ static void game_round_init(void) {
             .dir = DIR_UP,
             .pos = { .x = 12*8, .y = 17*8+4 },
         },
+        .type = GHOSTTYPE_INKY,
         .next_dir = DIR_UP,
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
@@ -1061,6 +1072,7 @@ static void game_round_init(void) {
             .dir = DIR_UP,
             .pos = { .x = 16*8, .y=17*8+4 },
         },
+        .type = GHOSTTYPE_CLYDE,
         .next_dir = DIR_UP, 
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
@@ -1193,6 +1205,19 @@ static int game_ghost_speed(const ghost_t* ghost) {
     }
 }
 
+// return the current global scatter or chase phase
+static ghoststate_t game_scatter_chase_phase(void) {
+    uint32_t t = since(state.game.round_started);
+    if (t < 7*60)       return GHOSTSTATE_SCATTER;
+    else if (t < 27*60) return GHOSTSTATE_CHASE;
+    else if (t < 34*60) return GHOSTSTATE_SCATTER;
+    else if (t < 54*60) return GHOSTSTATE_CHASE;
+    else if (t < 59*60) return GHOSTSTATE_SCATTER;
+    else if (t < 79*60) return GHOSTSTATE_CHASE;
+    else if (t < 84*60) return GHOSTSTATE_SCATTER;
+    else return GHOSTSTATE_CHASE;
+}
+
 // switches a ghost into new state if needed
 static void game_update_ghost_state(ghost_t* ghost) {
     assert(ghost);
@@ -1213,7 +1238,7 @@ static void game_update_ghost_state(ghost_t* ghost) {
         case GHOSTSTATE_FRIGHTENED:
             // FIXME: length of frightened period is variable
             if (since(ghost->frightened) >  6*60) {
-                new_state = state.game.scatter_or_chase;
+                new_state = game_scatter_chase_phase();
             }
             break;
         default:
@@ -1222,12 +1247,67 @@ static void game_update_ghost_state(ghost_t* ghost) {
                 new_state = GHOSTSTATE_FRIGHTENED;
             }
             else {
-                new_state = state.game.scatter_or_chase;
+                new_state = game_scatter_chase_phase();
             }
     }
     if (new_state != ghost->state) {
         // FIXME: handle transition
         ghost->state = new_state;
+    }
+}
+
+static void game_update_ghost_target(ghost_t* ghost) {
+    assert(ghost);
+    int2_t pos = ghost->target_pos;
+    switch (ghost->state) {
+        case GHOSTSTATE_SCATTER:
+            static const int2_t scatter_targets[NUM_GHOSTS] = { { 25, 0 }, { 2, 0 }, { 27, 34 }, { 0, 34 } };
+            assert((ghost->type >= 0) && (ghost->type < NUM_GHOSTS));
+            pos = scatter_targets[ghost->type];
+            break;
+        case GHOSTSTATE_CHASE:
+            // FIXME
+            break;
+        case GHOSTSTATE_FRIGHTENED:
+            // FIXME: chose a random target position every couple of ticks
+            break;
+        case GHOSTSTATE_EYES:
+            // move towards the ghost house door
+            pos = i2(13, 15);
+            break;
+    }
+    ghost->target_pos = pos;
+}
+
+static void game_update_ghost_dir(ghost_t* ghost) {
+    assert(ghost);
+    // only compute new direction when currently at midpoint of tile
+    const int2_t dist_to_mid = dist_to_tile_mid(ghost->actor.pos);
+    if ((dist_to_mid.x == 0) && (dist_to_mid.y == 0)) {
+        // new direction is the previously computed next-direction
+        ghost->actor.dir = ghost->next_dir;
+
+        // compute new next-direction
+        const int2_t dir_vec = dir_to_vec(ghost->actor.dir);
+        const int2_t lookahead_pos = add_i2(pixel_to_tile_pos(ghost->actor.pos), dir_vec);
+
+        // try each direction and take the one that moves closest to the target
+        const dir_t dirs[NUM_DIRS]    = { DIR_UP, DIR_LEFT, DIR_DOWN, DIR_RIGHT };
+        const dir_t revdirs[NUM_DIRS] = { DIR_DOWN, DIR_RIGHT, DIR_UP, DIR_LEFT };
+        int min_dist = 100000;
+        int dist = 0;
+        for (int i = 0; i < NUM_DIRS; i++) {
+            const dir_t dir = dirs[i];
+            const dir_t revdir = revdirs[i];
+            const int2_t test_pos = add_i2(lookahead_pos, dir_to_vec(dir));
+            const bool allow_door = (ghost->state == GHOSTSTATE_EYES) || (ghost->state == GHOSTSTATE_LEAVEHOUSE);
+            if ((revdir != ghost->actor.dir) && !is_blocking_tile(test_pos, allow_door)) {
+                if ((dist = squared_distance_i2(test_pos, ghost->target_pos)) < min_dist) {
+                    min_dist = dist;
+                    ghost->next_dir = dir;
+                }
+            }
+        }
     }
 }
 
@@ -1275,6 +1355,30 @@ static void game_update_actors(void) {
         ghost_t* ghost = &state.game.ghost[ghost_index];
         // handle ghost-state transitions
         game_update_ghost_state(ghost);
+        const int num_move_ticks = game_ghost_speed(ghost);
+        switch (ghost->state) {
+            case GHOSTSTATE_ENTERHOUSE:
+            case GHOSTSTATE_LEAVEHOUSE:
+            case GHOSTSTATE_HOUSE:
+                // FIXME
+                break;
+            default:
+                {
+                    // all 'non-house' states only differ by the target selection
+                    game_update_ghost_target(ghost);
+                    game_update_ghost_dir(ghost);
+                    for (int i = 0; i < num_move_ticks; i++) {
+                        actor_t* actor = &ghost->actor;
+                        const bool allow_cornering = false;
+                        const bool allow_door = false;
+                        if (can_move(actor->pos, actor->dir, allow_cornering, allow_door)) {
+                            actor->pos = move(actor->pos, actor->dir, allow_cornering, allow_door);
+                            actor->anim_tick++;
+                        }
+                    }
+                }
+                break;
+        }
     }
 }
 
@@ -1282,11 +1386,11 @@ static void game_tick(void) {
     // initialize game state
     if (now(state.game.started)) {
         start(&state.gfx.fadein);
-        start(&state.game.round_started);
+        start(&state.game.prelude_started);
         game_init();
     }
     // initialize new round
-    if (now(state.game.round_started)) {
+    if (now(state.game.prelude_started)) {
         game_round_init();
     }
     // debug: speed the prelude up 
@@ -1296,7 +1400,7 @@ static void game_tick(void) {
         const int ticks_per_sec = 60;
     #endif
     // after 3 seconds, make actors visible, remove "PLAYER ONE"
-    if (after(state.game.round_started, 3*ticks_per_sec)) {
+    if (after(state.game.prelude_started, 3*ticks_per_sec)) {
         vid_color_text(i2(9,14), 0x10, "          ");
         for (int i = 0; i < NUM_GHOSTS+1; i++) {
             state.gfx.sprite[i].enabled = true;
@@ -1306,12 +1410,15 @@ static void game_tick(void) {
         }
     }
     // after 5 seconds, the interactive game starts
-    if (after(state.game.round_started, 5*ticks_per_sec)) {
+    if (after(state.game.prelude_started, 5*ticks_per_sec)) {
+        start(&state.game.round_started);
+    }
+    if (now(state.game.round_started)) {
         state.game.frozen = false;
         // clear the 'READY!' message
         vid_color_text(i2(11,20), 0x10, "      ");
     }
-    
+
     if (!state.game.frozen) {
         game_update_actors();
     }

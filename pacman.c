@@ -1259,9 +1259,9 @@ static void game_update_ghost_state(ghost_t* ghost) {
 static void game_update_ghost_target(ghost_t* ghost) {
     assert(ghost);
     int2_t pos = ghost->target_pos;
+    static const int2_t scatter_targets[NUM_GHOSTS] = { { 25, 0 }, { 2, 0 }, { 27, 34 }, { 0, 34 } };
     switch (ghost->state) {
         case GHOSTSTATE_SCATTER:
-            static const int2_t scatter_targets[NUM_GHOSTS] = { { 25, 0 }, { 2, 0 }, { 27, 34 }, { 0, 34 } };
             assert((ghost->type >= 0) && (ghost->type < NUM_GHOSTS));
             pos = scatter_targets[ghost->type];
             break;
@@ -1274,6 +1274,8 @@ static void game_update_ghost_target(ghost_t* ghost) {
         case GHOSTSTATE_EYES:
             // move towards the ghost house door
             pos = i2(13, 15);
+            break;
+        default:
             break;
     }
     ghost->target_pos = pos;

@@ -32,6 +32,8 @@ enum {
     NUM_STATUS_FRUITS   = 7,    // max number of displayed fruits at bottom right
     NUM_DOTS            = 244,  // 240 small dots + 4 pills
     NUM_PILLS           = 4,    // number of energizer pills on playfield
+    ANTEPORTAS_X        = 14*TILE_WIDTH,  // pixel position of the house enter/leave point
+    ANTEPORTAS_Y        = 14*TILE_HEIGHT + TILE_HEIGHT/2
 };
 
 // common tile codes
@@ -161,13 +163,12 @@ typedef struct {
     int2_t target_pos;
     ghoststate_t state;
     timer_t frightened;
+    uint8_t dot_counter;    // the ghost's personal dot counter for the ghost-house-logic
 } ghost_t;
 
 // pacman state
 typedef struct {
     actor_t actor;
-    timer_t last_dot_eaten;     // last time Pacman ate a dot
-    timer_t last_pill_eaten;    // last time Pacman ate a pill
 } pacman_t;
 
 // the tile- and sprite-renderer's vertex structure
@@ -207,11 +208,15 @@ static struct {
         timer_t started;
         timer_t prelude_started;
         timer_t round_started;
+        timer_t last_dot_eaten;     // last time Pacman ate a dot
+        timer_t last_pill_eaten;    // last time Pacman ate a pill
+        timer_t force_leave_house;  // starts when a dot is eaten
         bool frozen;            // if true the game is currently 'frozen'
         uint32_t score;         // score / 10
         uint32_t hiscore;       // hiscore / 10
         uint8_t num_lives;
-        uint8_t num_dots_eaten;
+        bool dot_counter_active;    // set to true when Pacman loses a life
+        uint8_t dot_counter;        // the global dot counter for the ghost-house-logic
         ghost_t ghost[NUM_GHOSTS];
         pacman_t pacman;
         fruit_t fruit[NUM_STATUS_FRUITS];
@@ -684,6 +689,16 @@ static int2_t dir_to_vec(dir_t dir) {
     return dir_map[dir];
 }
 
+// return the reverse dir for a direction
+static dir_t reverse_dir(dir_t dir) {
+    switch (dir) {
+        case DIR_RIGHT: return DIR_LEFT;
+        case DIR_DOWN:  return DIR_UP;
+        case DIR_LEFT:  return DIR_RIGHT;
+        default:        return DIR_DOWN;
+    }
+}
+
 // return tile code at tile position
 static uint8_t tile_code_at(int2_t tile_pos) {
     assert((tile_pos.x >= 0) && (tile_pos.x < DISPLAY_TILES_X));
@@ -945,15 +960,19 @@ static void game_init(void) {
     state.game.frozen = true;
     state.game.num_lives = NUM_LIVES;
     state.game.score = 0;
-    state.game.num_dots_eaten = 0;
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
         state.game.fruit[i] = (i==0) ? FRUITTYPE_CHERRIES:FRUITTYPE_NONE;
     }
 }
 
-// draw the playfield tiles at the start of a round
+// setup state at start of a game round
 static void game_round_init(void) {
     spr_clear();
+    state.game.dot_counter_active = false;
+    state.game.dot_counter = 0;
+    disable(&state.game.last_dot_eaten);
+    disable(&state.game.last_pill_eaten);
+    disable(&state.game.force_leave_house);
 
     // draw the playfield
     {
@@ -1022,8 +1041,6 @@ static void game_round_init(void) {
             .dir = DIR_LEFT, 
             .pos = { .x = 14 * 8, 26 * 8 + 4 },
         },
-        .last_dot_eaten = disabled_timer(),
-        .last_pill_eaten = disabled_timer()
     };
     state.gfx.sprite[SPRITE_PACMAN] = (sprite_t) { .enabled=false, .color=COLOR_PACMAN };
 
@@ -1037,6 +1054,7 @@ static void game_round_init(void) {
         .next_dir = DIR_LEFT,
         .state = GHOSTSTATE_SCATTER,
         .frightened = disabled_timer(),
+        .dot_counter = 0
     };
     state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = false, .color = COLOR_BLINKY };
 
@@ -1050,6 +1068,7 @@ static void game_round_init(void) {
         .next_dir = DIR_DOWN,
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
+        .dot_counter = 0,
     };
     state.gfx.sprite[SPRITE_PINKY] = (sprite_t) { .enabled = false, .color = COLOR_PINKY };
 
@@ -1063,6 +1082,8 @@ static void game_round_init(void) {
         .next_dir = DIR_UP,
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
+        // FIXME: needs to be adjusted by current round!
+        .dot_counter = 30,
     };
     state.gfx.sprite[SPRITE_INKY] = (sprite_t) { .enabled = false, .color = COLOR_INKY };
 
@@ -1076,6 +1097,8 @@ static void game_round_init(void) {
         .next_dir = DIR_UP, 
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
+        // FIXME: needs to be adjusted by current round!
+        .dot_counter = 60,
     };
     state.gfx.sprite[SPRITE_CLYDE] = (sprite_t) { .enabled = false, .color = COLOR_CLYDE };
 }
@@ -1163,11 +1186,11 @@ static void game_update_sprites(void) {
 
 // return true if Pacman should move in this tick
 static bool game_pacman_should_move(void) {
-    if (now(state.game.pacman.last_dot_eaten)) {
+    if (now(state.game.last_dot_eaten)) {
         // eating a dot causes Pacman to stop for 1 tick
         return false;
     }
-    else if (since(state.game.pacman.last_pill_eaten) < 3) {
+    else if (since(state.game.last_pill_eaten) < 3) {
         // eating an energizer pill causes Pacman to stop for 3 ticks
         return false;
     }
@@ -1188,6 +1211,11 @@ static int game_ghost_speed(const ghost_t* ghost) {
     assert(ghost);
     // FIXME: speeds are also level-dependent!
     switch (ghost->state) {
+        case GHOSTSTATE_HOUSE:
+        case GHOSTSTATE_LEAVEHOUSE:
+        case GHOSTSTATE_ENTERHOUSE:
+            // inside house at half speed (estimated)
+            return state.tick & 1;
         case GHOSTSTATE_FRIGHTENED:
             // move at 50% speed when frightened
             return state.tick & 1;
@@ -1230,10 +1258,37 @@ static void game_update_ghost_state(ghost_t* ghost) {
             // FIXME
             break;
         case GHOSTSTATE_HOUSE:
-            // FIXME
+            if (after(state.game.force_leave_house, 4*60)) {
+                // if Pacman hasn't eaten dots for 4 seconds, the next ghost
+                // is forced out of the house
+                // FIXME: time is reduced to 3 seconds after round 5
+                new_state = GHOSTSTATE_LEAVEHOUSE;
+                start(&state.game.force_leave_house);
+            }
+            else if (state.game.dot_counter_active) {
+                // if Pacman has lost a live this round, the global dot counter is used
+                if ((ghost->type == GHOSTTYPE_PINKY) && (state.game.dot_counter == 7)) {
+                    new_state = GHOSTSTATE_LEAVEHOUSE;
+                }
+                else if ((ghost->type == GHOSTTYPE_INKY) && (state.game.dot_counter == 17)) {
+                    new_state = GHOSTSTATE_LEAVEHOUSE;
+                }
+                else if ((ghost->type == GHOSTTYPE_CLYDE) && (state.game.dot_counter == 32)) {
+                    new_state = GHOSTSTATE_LEAVEHOUSE;
+                    // NOTE that global dot counter is deactivated if (and only if) Clyde
+                    // is in the house and the dot counter reaches 32
+                    state.game.dot_counter_active = false;
+                }
+            }
+            else if (ghost->dot_counter == 0) {
+                // in the normal case, check the ghost's personal dot counter
+                new_state = GHOSTSTATE_LEAVEHOUSE;
+            }
             break;
         case GHOSTSTATE_LEAVEHOUSE:
-            // FIXME
+            if (ghost->actor.pos.y == ANTEPORTAS_Y) {
+                new_state = GHOSTSTATE_SCATTER;
+            }
             break;
         case GHOSTSTATE_FRIGHTENED:
             // FIXME: length of frightened period is variable
@@ -1250,8 +1305,25 @@ static void game_update_ghost_state(ghost_t* ghost) {
                 new_state = game_scatter_chase_phase();
             }
     }
+    // handle state transitions
     if (new_state != ghost->state) {
-        // FIXME: handle transition
+        switch (ghost->state) {
+            case GHOSTSTATE_LEAVEHOUSE:
+                // after leaving the ghost house, head to the left
+                ghost->next_dir = ghost->actor.dir = DIR_LEFT;
+                break;
+            case GHOSTSTATE_ENTERHOUSE:
+                // after entering the ghost house, start moving up and down
+                ghost->next_dir = ghost->actor.dir = DIR_DOWN;
+                break;
+            case GHOSTSTATE_FRIGHTENED:
+                // don't reverse direction when leaving frightened state
+                break;
+            default:
+                // all other state transition cause a reverse of direction
+                ghost->next_dir = reverse_dir(ghost->actor.dir);
+                break;
+        }
         ghost->state = new_state;
     }
 }
@@ -1281,33 +1353,111 @@ static void game_update_ghost_target(ghost_t* ghost) {
     ghost->target_pos = pos;
 }
 
-static void game_update_ghost_dir(ghost_t* ghost) {
+/* compute the next ghost direction, return true if resulting movement
+    should always happen regardless of current ghost position or blocking
+    tiles (this special case is used for movement inside the ghost house.
+*/
+static bool game_update_ghost_dir(ghost_t* ghost) {
     assert(ghost);
-    // only compute new direction when currently at midpoint of tile
-    const int2_t dist_to_mid = dist_to_tile_mid(ghost->actor.pos);
-    if ((dist_to_mid.x == 0) && (dist_to_mid.y == 0)) {
-        // new direction is the previously computed next-direction
+    // inside ghost-house, just move up and down
+    if (ghost->state == GHOSTSTATE_HOUSE) {
+        if (ghost->actor.pos.y <= 17*TILE_HEIGHT) {
+            ghost->next_dir = DIR_DOWN;
+        }
+        else if (ghost->actor.pos.y >= 18*TILE_HEIGHT) {
+            ghost->next_dir = DIR_UP;
+        }
         ghost->actor.dir = ghost->next_dir;
+        // force movement
+        return true;
+    }
+    // navigate the ghost out of the ghost house
+    else if (ghost->state == GHOSTSTATE_LEAVEHOUSE) {
+        const int2_t pos = ghost->actor.pos;
+        if (pos.x == ANTEPORTAS_X) {
+            if (pos.y > ANTEPORTAS_Y) {
+                ghost->next_dir = DIR_UP;
+            }
+        }
+        else {
+            const int16_t mid_y = 17*TILE_HEIGHT + TILE_HEIGHT/2;
+            if (pos.y > mid_y) {
+                ghost->next_dir = DIR_UP;
+            }
+            else if (pos.y < mid_y) {
+                ghost->next_dir = DIR_DOWN;
+            }
+            else {
+                ghost->next_dir = (pos.x > ANTEPORTAS_X) ? DIR_LEFT:DIR_RIGHT;
+            }
+        }
+        ghost->actor.dir = ghost->next_dir;
+        return true;
+    }
+    else if (ghost->state == GHOSTSTATE_ENTERHOUSE) {
+        return true;
+    }
+    // all non-house states: just head towards the current target point
+    else {
+        // only compute new direction when currently at midpoint of tile
+        const int2_t dist_to_mid = dist_to_tile_mid(ghost->actor.pos);
+        if ((dist_to_mid.x == 0) && (dist_to_mid.y == 0)) {
+            // new direction is the previously computed next-direction
+            ghost->actor.dir = ghost->next_dir;
 
-        // compute new next-direction
-        const int2_t dir_vec = dir_to_vec(ghost->actor.dir);
-        const int2_t lookahead_pos = add_i2(pixel_to_tile_pos(ghost->actor.pos), dir_vec);
+            // compute new next-direction
+            const int2_t dir_vec = dir_to_vec(ghost->actor.dir);
+            const int2_t lookahead_pos = add_i2(pixel_to_tile_pos(ghost->actor.pos), dir_vec);
 
-        // try each direction and take the one that moves closest to the target
-        const dir_t dirs[NUM_DIRS]    = { DIR_UP, DIR_LEFT, DIR_DOWN, DIR_RIGHT };
-        const dir_t revdirs[NUM_DIRS] = { DIR_DOWN, DIR_RIGHT, DIR_UP, DIR_LEFT };
-        int min_dist = 100000;
-        int dist = 0;
-        for (int i = 0; i < NUM_DIRS; i++) {
-            const dir_t dir = dirs[i];
-            const dir_t revdir = revdirs[i];
-            const int2_t test_pos = add_i2(lookahead_pos, dir_to_vec(dir));
-            const bool allow_door = (ghost->state == GHOSTSTATE_EYES) || (ghost->state == GHOSTSTATE_LEAVEHOUSE);
-            if ((revdir != ghost->actor.dir) && !is_blocking_tile(test_pos, allow_door)) {
-                if ((dist = squared_distance_i2(test_pos, ghost->target_pos)) < min_dist) {
-                    min_dist = dist;
-                    ghost->next_dir = dir;
+            // try each direction and take the one that moves closest to the target
+            const dir_t dirs[NUM_DIRS]    = { DIR_UP, DIR_LEFT, DIR_DOWN, DIR_RIGHT };
+            int min_dist = 100000;
+            int dist = 0;
+            for (int i = 0; i < NUM_DIRS; i++) {
+                const dir_t dir = dirs[i];
+                const dir_t revdir = reverse_dir(dir);
+                const int2_t test_pos = add_i2(lookahead_pos, dir_to_vec(dir));
+                const bool allow_door = (ghost->state == GHOSTSTATE_EYES) || (ghost->state == GHOSTSTATE_LEAVEHOUSE);
+                if ((revdir != ghost->actor.dir) && !is_blocking_tile(test_pos, allow_door)) {
+                    if ((dist = squared_distance_i2(test_pos, ghost->target_pos)) < min_dist) {
+                        min_dist = dist;
+                        ghost->next_dir = dir;
+                    }
                 }
+            }
+        }
+        return false;
+    }
+}
+
+/* Update the dot counters used to decide whether ghosts must leave the house.
+    
+    This is called each time Pacman eats a dot.
+
+    Each ghost has a dot limit which is reset at the start of a round. Each time
+    Pacman eats a dot, the highest priority ghost in the ghost house counts
+    down its dot counter.
+
+    When the dot personal counter reaches zero the ghost leaves the house
+    and the next highest-priority dot counter starts counting.
+
+    If a life is lost, the personal dot counters are deactivated and instead
+    a global dot counter is used.
+
+    If pacman doesn't eat dots for a while, the next ghost is forced out of the
+    house using a timer.
+*/
+static void game_update_dot_counters(void) {
+    // if a life was lost round, use the global dot counter (this will)
+    // be deactivated again after all ghosts left the house
+    if (state.game.dot_counter_active) {
+        state.game.dot_counter++;
+    }
+    else {
+        for (int i = 0; i < NUM_GHOSTS; i++) {
+            if (state.game.ghost[i].dot_counter > 0) {
+                state.game.ghost[i].dot_counter--;
+                break;
             }
         }
     }
@@ -1338,14 +1488,14 @@ static void game_update_actors(void) {
         if (is_dot(tile_pos)) {
             vid_tile(tile_pos, TILE_SPACE);
             state.game.score += 1;
-            state.game.num_dots_eaten++;
-            start(&state.game.pacman.last_dot_eaten);
+            start(&state.game.last_dot_eaten);
+            start(&state.game.force_leave_house);
+            game_update_dot_counters();
         }
         if (is_pill(tile_pos)) {
             vid_tile(tile_pos, TILE_SPACE);
             state.game.score += 5;
-            state.game.num_dots_eaten++;
-            start(&state.game.pacman.last_pill_eaten);
+            start(&state.game.last_pill_eaten);
             for (int i = 0; i < NUM_GHOSTS; i++) {
                 start(&state.game.ghost[i].frightened);
             }
@@ -1358,28 +1508,16 @@ static void game_update_actors(void) {
         // handle ghost-state transitions
         game_update_ghost_state(ghost);
         const int num_move_ticks = game_ghost_speed(ghost);
-        switch (ghost->state) {
-            case GHOSTSTATE_ENTERHOUSE:
-            case GHOSTSTATE_LEAVEHOUSE:
-            case GHOSTSTATE_HOUSE:
-                // FIXME
-                break;
-            default:
-                {
-                    // all 'non-house' states only differ by the target selection
-                    game_update_ghost_target(ghost);
-                    game_update_ghost_dir(ghost);
-                    for (int i = 0; i < num_move_ticks; i++) {
-                        actor_t* actor = &ghost->actor;
-                        const bool allow_cornering = false;
-                        const bool allow_door = false;
-                        if (can_move(actor->pos, actor->dir, allow_cornering, allow_door)) {
-                            actor->pos = move(actor->pos, actor->dir, allow_cornering, allow_door);
-                            actor->anim_tick++;
-                        }
-                    }
-                }
-                break;
+        game_update_ghost_target(ghost);
+        bool force_move = game_update_ghost_dir(ghost);
+        for (int i = 0; i < num_move_ticks; i++) {
+            actor_t* actor = &ghost->actor;
+            const bool allow_cornering = false;
+            const bool allow_door = false;
+            if (force_move || can_move(actor->pos, actor->dir, allow_cornering, allow_door)) {
+                actor->pos = move(actor->pos, actor->dir, allow_cornering, allow_door);
+                actor->anim_tick++;
+            }
         }
     }
 }

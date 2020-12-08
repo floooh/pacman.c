@@ -1399,7 +1399,8 @@ static void game_update_ghost_target(ghost_t* ghost) {
                         pos = add_i2(pm_pos, mul_i2(pm_dir, 4));
                         break;
                     case GHOSTTYPE_INKY:
-                        // Inky targets a position between Blinky and 2 tiles ahead of Pacman
+                        // Inky targets an extrapolated pos along a line two tiles
+                        // ahead of Pacman through Blinky
                         {
                             const int2_t blinky_pos = pixel_to_tile_pos(state.game.ghost[GHOSTTYPE_BLINKY].actor.pos);
                             const int2_t p = add_i2(pm_pos, mul_i2(pm_dir, 2));

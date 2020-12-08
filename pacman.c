@@ -1417,6 +1417,8 @@ static void game_update_ghost_target(ghost_t* ghost) {
                             pos = scatter_targets[GHOSTTYPE_CLYDE];
                         }
                         break;
+                    default:
+                        break;
                 }
             }
             break;

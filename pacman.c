@@ -737,7 +737,7 @@ static uint8_t tile_code_at(int2_t tile_pos) {
     return state.gfx.video_ram[tile_pos.y][tile_pos.x];
 }
 
-// check if a tile position contains a blocking tile, with special flag for the ghost-house-door
+// check if a tile position contains a blocking tile
 static bool is_blocking_tile(int2_t tile_pos) {
     const uint8_t tile_code = tile_code_at(tile_pos);
     switch (tile_code) {

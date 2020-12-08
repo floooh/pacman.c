@@ -9,9 +9,9 @@
 #include <assert.h>
 #include <string.h> // memset()
 
-// debug options for skipping intro screen and game-loop prelude
-#define DBG_SKIP_INTRO      (1)
-#define DBG_SKIP_PRELUDE    (1)
+#define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
+#define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
+#define DBG_MARKERS         (1)     // set to (1) to show debug markers
 
 // various constants
 enum {
@@ -24,9 +24,10 @@ enum {
     DISPLAY_PIXELS_X    = DISPLAY_TILES_X * TILE_WIDTH,
     DISPLAY_PIXELS_Y    = DISPLAY_TILES_Y * TILE_HEIGHT,
     NUM_SPRITES         = 8,
+    NUM_DEBUG_MARKERS   = 16,
     TILE_TEXTURE_WIDTH  = 256 * TILE_WIDTH,
     TILE_TEXTURE_HEIGHT = TILE_HEIGHT + SPRITE_HEIGHT,  
-    MAX_VERTICES        = ((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + 1) * 6,
+    MAX_VERTICES        = ((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + NUM_DEBUG_MARKERS) * 6,
     FADE_TICKS          = 30,       // duration of fade-in/out
     NUM_LIVES           = 3,
     NUM_STATUS_FRUITS   = 7,    // max number of displayed fruits at bottom right
@@ -186,6 +187,13 @@ typedef struct {
     int2_t pos;
 } sprite_t;
 
+// debug visualization markers
+typedef struct {
+    bool enabled;
+    uint8_t tile, color;    // tile and color code
+    int2_t tile_pos;
+} debugmarker_t;
+
 // all state is in a single nested struct
 static struct {
 
@@ -205,6 +213,7 @@ static struct {
 
     // game state
     struct {
+        uint32_t xorshift;      // current xorshift random-number-generator state
         timer_t started;
         timer_t prelude_started;
         timer_t round_started;
@@ -245,6 +254,9 @@ static struct {
 
         // up to 8 sprites
         sprite_t sprite[NUM_SPRITES];
+
+        // up to 16 debug markers
+        debugmarker_t debug_marker[NUM_DEBUG_MARKERS];
 
         // current fade value (0: no fade, 255: fully opaque)
         uint8_t fade;
@@ -377,6 +389,15 @@ static void cleanup(void) {
 }
 
 /*== GRAB BAG OF HELPER FUNCTIONS ============================================*/
+
+// xorshift random number generator
+static uint32_t xorshift32(void) {
+    uint32_t x = state.game.xorshift;
+    x ^= x<<13;
+    x ^= x>>17;
+    x ^= x<<5;
+    return state.game.xorshift = x;
+}
 
 // set a timer to the next game tick
 static void start(timer_t* t) {
@@ -601,7 +622,7 @@ static void vid_draw_tile_quad(int2_t tile_pos, uint8_t color_code, uint8_t tile
 }
 
 
-// clear/reset all sprites by placing them outside the screen
+// disable and reset all sprites
 static void spr_clear(void) {
     memset(&state.gfx.sprite, 0, sizeof(state.gfx.sprite));
 }
@@ -673,11 +694,11 @@ static int2_t clamped_tile_pos(int2_t tile_pos) {
     else if (res.x >= DISPLAY_TILES_X) {
         res.x = DISPLAY_TILES_X - 1;
     }
-    if (res.y < 0) {
-        res.y = 0;
+    if (res.y < 3) {
+        res.y = 3;
     }
-    else if (res.y >= DISPLAY_TILES_Y) {
-        res.y = DISPLAY_TILES_Y - 1;
+    else if (res.y >= (DISPLAY_TILES_Y-2)) {
+        res.y = DISPLAY_TILES_Y - 3;
     }
     return res;
 }
@@ -707,15 +728,13 @@ static uint8_t tile_code_at(int2_t tile_pos) {
 }
 
 // check if a tile position contains a blocking tile, with special flag for the ghost-house-door
-static bool is_blocking_tile(int2_t tile_pos, bool allow_door) {
+static bool is_blocking_tile(int2_t tile_pos) {
     const uint8_t tile_code = tile_code_at(tile_pos);
     switch (tile_code) {
         case TILE_DOT:
         case TILE_PILL:
         case TILE_SPACE:
             return false;
-        case TILE_DOOR:
-            return !allow_door;
         default:
             return true;
     }
@@ -737,7 +756,7 @@ static bool is_tunnel(int2_t tile_pos) {
 }
 
 // test if movement from a pixel position in a wanted direction is possible 
-bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering, bool allow_door) {
+bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering) {
     const int2_t dir_vec = dir_to_vec(wanted_dir);
     const int2_t dist_mid = dist_to_tile_mid(pos);
     
@@ -755,7 +774,7 @@ bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering, bool allow_doo
     // look one tile ahead in movement direction
     const int2_t tile_pos = pixel_to_tile_pos(pos);
     const int2_t check_pos = clamped_tile_pos(i2(tile_pos.x + dir_vec.x, tile_pos.y + dir_vec.y));
-    const bool is_blocked = is_blocking_tile(check_pos, allow_door);
+    const bool is_blocked = is_blocking_tile(check_pos);
     if ((!allow_cornering && (0 != perp_dist_mid)) || (is_blocked && (0 == move_dist_mid))) {
         // way is blocked
         return false;
@@ -767,7 +786,7 @@ bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering, bool allow_doo
 }
 
 // compute a new pixel position along a direction (without blocking check!)
-static int2_t move(int2_t pos, dir_t dir, bool allow_cornering, bool allow_door) {
+static int2_t move(int2_t pos, dir_t dir, bool allow_cornering) {
     const int2_t dir_vec = dir_to_vec(dir);
     pos = add_i2(pos, dir_vec);
 
@@ -792,6 +811,22 @@ static int2_t move(int2_t pos, dir_t dir, bool allow_cornering, bool allow_door)
         pos.x = 0;
     }
     return pos;
+}
+
+// disable and reset all debug markers
+static void dbg_clear(void) {
+    memset(&state.gfx.debug_marker, 0, sizeof(state.gfx.debug_marker));
+}
+
+// set a debug marker
+static void dbg_marker(int index, int2_t tile_pos, uint8_t tile_code, uint8_t color_code) {
+    assert((index >= 0) && (index < NUM_DEBUG_MARKERS));
+    state.gfx.debug_marker[index] = (debugmarker_t) {
+        .enabled = true,
+        .tile = tile_code,
+        .color = color_code,
+        .tile_pos = clamped_tile_pos(tile_pos)
+    };
 }
 
 /*== TOP-LEVEL GAME CODE =====================================================*/
@@ -968,6 +1003,7 @@ static void game_init(void) {
 // setup state at start of a game round
 static void game_round_init(void) {
     spr_clear();
+    state.game.xorshift = 0x12345678;
     state.game.dot_counter_active = false;
     state.game.dot_counter = 0;
     disable(&state.game.last_dot_eaten);
@@ -1341,7 +1377,11 @@ static void game_update_ghost_target(ghost_t* ghost) {
             // FIXME
             break;
         case GHOSTSTATE_FRIGHTENED:
-            // FIXME: chose a random target position every couple of ticks
+            /* in frightened state just select a random target position
+                this has the effect that ghosts in frightened state 
+                move in a random direction at each intersection
+            */
+            pos = i2(xorshift32() % DISPLAY_TILES_X, xorshift32() % DISPLAY_TILES_Y);
             break;
         case GHOSTSTATE_EYES:
             // move towards the ghost house door
@@ -1397,7 +1437,7 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
     else if (ghost->state == GHOSTSTATE_ENTERHOUSE) {
         return true;
     }
-    // all non-house states: just head towards the current target point
+    // scatter/chase/frightened: just head towards the current target point
     else {
         // only compute new direction when currently at midpoint of tile
         const int2_t dist_to_mid = dist_to_tile_mid(ghost->actor.pos);
@@ -1410,15 +1450,14 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
             const int2_t lookahead_pos = add_i2(pixel_to_tile_pos(ghost->actor.pos), dir_vec);
 
             // try each direction and take the one that moves closest to the target
-            const dir_t dirs[NUM_DIRS]    = { DIR_UP, DIR_LEFT, DIR_DOWN, DIR_RIGHT };
+            const dir_t dirs[NUM_DIRS] = { DIR_UP, DIR_LEFT, DIR_DOWN, DIR_RIGHT };
             int min_dist = 100000;
             int dist = 0;
             for (int i = 0; i < NUM_DIRS; i++) {
                 const dir_t dir = dirs[i];
                 const dir_t revdir = reverse_dir(dir);
-                const int2_t test_pos = add_i2(lookahead_pos, dir_to_vec(dir));
-                const bool allow_door = (ghost->state == GHOSTSTATE_EYES) || (ghost->state == GHOSTSTATE_LEAVEHOUSE);
-                if ((revdir != ghost->actor.dir) && !is_blocking_tile(test_pos, allow_door)) {
+                const int2_t test_pos = clamped_tile_pos(add_i2(lookahead_pos, dir_to_vec(dir)));
+                if ((revdir != ghost->actor.dir) && !is_blocking_tile(test_pos)) {
                     if ((dist = squared_distance_i2(test_pos, ghost->target_pos)) < min_dist) {
                         min_dist = dist;
                         ghost->next_dir = dir;
@@ -1473,14 +1512,13 @@ static void game_update_actors(void) {
         actor_t* actor = &state.game.pacman.actor;
         const dir_t wanted_dir = input_dir(actor->dir);
         const bool allow_cornering = true;
-        const bool allow_door = false;
         // look ahead to check if the wanted direction is blocked
-        if (can_move(actor->pos, wanted_dir, allow_cornering, allow_door)) {
+        if (can_move(actor->pos, wanted_dir, allow_cornering)) {
             actor->dir = wanted_dir;
         }
         // move into the current direction
-        if (can_move(actor->pos, actor->dir, allow_cornering, allow_door)) {
-            actor->pos = move(actor->pos, actor->dir, allow_cornering, allow_door);
+        if (can_move(actor->pos, actor->dir, allow_cornering)) {
+            actor->pos = move(actor->pos, actor->dir, allow_cornering);
             actor->anim_tick++;
         }
         // eat dot or energizer pill?
@@ -1509,13 +1547,12 @@ static void game_update_actors(void) {
         game_update_ghost_state(ghost);
         const int num_move_ticks = game_ghost_speed(ghost);
         game_update_ghost_target(ghost);
-        bool force_move = game_update_ghost_dir(ghost);
         for (int i = 0; i < num_move_ticks; i++) {
+            bool force_move = game_update_ghost_dir(ghost);
             actor_t* actor = &ghost->actor;
             const bool allow_cornering = false;
-            const bool allow_door = false;
-            if (force_move || can_move(actor->pos, actor->dir, allow_cornering, allow_door)) {
-                actor->pos = move(actor->pos, actor->dir, allow_cornering, allow_door);
+            if (force_move || can_move(actor->pos, actor->dir, allow_cornering)) {
+                actor->pos = move(actor->pos, actor->dir, allow_cornering);
                 actor->anim_tick++;
             }
         }
@@ -1575,6 +1612,25 @@ static void game_tick(void) {
         start(&state.gfx.fadeout);
         start_after(&state.hiscore.started, FADE_TICKS);
     }
+
+    #if DBG_MARKERS
+    // visualize current ghost targets
+    for (int i = 0; i < NUM_GHOSTS; i++) {
+        const ghost_t* ghost = &state.game.ghost[i];
+        uint8_t tile = 'X';
+        switch (ghost->state) {
+            case GHOSTSTATE_NONE:       tile = 'N'; break;
+            case GHOSTSTATE_CHASE:      tile = 'C'; break;
+            case GHOSTSTATE_SCATTER:    tile = 'S'; break;
+            case GHOSTSTATE_FRIGHTENED: tile = 'F'; break;
+            case GHOSTSTATE_EYES:       tile = 'E'; break;
+            case GHOSTSTATE_HOUSE:      tile = 'H'; break;
+            case GHOSTSTATE_LEAVEHOUSE: tile = 'L'; break;
+            case GHOSTSTATE_ENTERHOUSE: tile = 'E'; break;
+        }
+        dbg_marker(i, state.game.ghost[i].target_pos, tile, COLOR_BLINKY+2*i);
+    }
+    #endif
 }
 
 /*== GFX SUBSYSTEM ===========================================================*/
@@ -1949,38 +2005,52 @@ static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_cod
     vtx->attr = (fade<<8) | color_code;
 }
 
-static void gfx_add_tile_vertices(void) {
+static void gfx_add_tile_vertices(uint32_t tx, uint32_t ty, uint8_t tile_code, uint8_t color_code) {
+    assert((tx >= 0) && (tx < DISPLAY_TILES_X) && (ty >= 0) && (ty < DISPLAY_TILES_Y));
     const float dx = 1.0f / DISPLAY_TILES_X;
     const float dy = 1.0f / DISPLAY_TILES_Y;
     const float du = (float)TILE_WIDTH / TILE_TEXTURE_WIDTH;
     const float dv = (float)TILE_HEIGHT / TILE_TEXTURE_HEIGHT;
+
+    const float x0 = tx * dx;
+    const float x1 = x0 + dx;
+    const float y0 = ty * dy;
+    const float y1 = y0 + dy;
+    const float u0 = tile_code * du;
+    const float u1 = u0 + du;
+    const float v0 = 0.0f;
+    const float v1 = dv;
+    /*
+        x0,y0
+        +-----+
+        | *   |
+        |   * |
+        +-----+
+                x1,y1
+    */
+    gfx_add_vertex(x0, y0, u0, v0, color_code, 0xFF);
+    gfx_add_vertex(x1, y0, u1, v0, color_code, 0xFF);
+    gfx_add_vertex(x1, y1, u1, v1, color_code, 0xFF);
+    gfx_add_vertex(x0, y0, u0, v0, color_code, 0xFF);
+    gfx_add_vertex(x1, y1, u1, v1, color_code, 0xFF);
+    gfx_add_vertex(x0, y1, u0, v1, color_code, 0xFF);
+}
+
+static void gfx_add_playfield_vertices(void) {
     for (uint32_t ty = 0; ty < DISPLAY_TILES_Y; ty++) {
         for (uint32_t tx = 0; tx < DISPLAY_TILES_X; tx++) {
             const uint8_t tile_code = state.gfx.video_ram[ty][tx];
             const uint8_t color_code = state.gfx.color_ram[ty][tx] & 0x1F;
+            gfx_add_tile_vertices(tx, ty, tile_code, color_code);
+        }
+    }
+}
 
-            const float x0 = tx * dx;
-            const float x1 = x0 + dx;
-            const float y0 = ty * dy;
-            const float y1 = y0 + dy;
-            const float u0 = tile_code * du;
-            const float u1 = u0 + du;
-            const float v0 = 0.0f;
-            const float v1 = dv;
-            /*
-                x0,y0
-                +-----+
-                | *   |
-                |   * |
-                +-----+
-                      x1,y1
-            */
-            gfx_add_vertex(x0, y0, u0, v0, color_code, 0xFF);
-            gfx_add_vertex(x1, y0, u1, v0, color_code, 0xFF);
-            gfx_add_vertex(x1, y1, u1, v1, color_code, 0xFF);
-            gfx_add_vertex(x0, y0, u0, v0, color_code, 0xFF);
-            gfx_add_vertex(x1, y1, u1, v1, color_code, 0xFF);
-            gfx_add_vertex(x0, y1, u0, v1, color_code, 0xFF);
+static void gfx_add_debugmarker_vertices(void) {
+    for (int i = 0; i < NUM_DEBUG_MARKERS; i++) {
+        const debugmarker_t* dbg = &state.gfx.debug_marker[i];
+        if (dbg->enabled) {
+            gfx_add_tile_vertices(dbg->tile_pos.x, dbg->tile_pos.y, dbg->tile, dbg->color);
         }
     }
 }
@@ -2088,8 +2158,9 @@ static void gfx_draw(void) {
 
     // update the playfield and sprite vertex buffer
     state.gfx.num_vertices = 0;
-    gfx_add_tile_vertices();
+    gfx_add_playfield_vertices();
     gfx_add_sprite_vertices();
+    gfx_add_debugmarker_vertices();
     if (state.gfx.fade > 0) {
         gfx_add_fade_vertices();
     }

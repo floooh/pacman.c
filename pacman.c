@@ -1524,7 +1524,7 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
     Pacman eats a dot, the highest priority ghost in the ghost house counts
     down its dot counter.
 
-    When the dot personal counter reaches zero the ghost leaves the house
+    When the ghost's dot counter reaches zero the ghost leaves the house
     and the next highest-priority dot counter starts counting.
 
     If a life is lost, the personal dot counters are deactivated and instead

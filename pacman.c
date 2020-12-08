@@ -485,6 +485,16 @@ static int2_t add_i2(int2_t v0, int2_t v1) {
     return (int2_t) { v0.x+v1.x, v0.y+v1.y };
 }
 
+// subtract two int2_t
+static int2_t sub_i2(int2_t v0, int2_t v1) {
+    return (int2_t) { v0.x-v1.x, v0.y-v1.y };
+}
+
+// multiply int2_t with scalar
+static int2_t mul_i2(int2_t v, int16_t s) {
+    return (int2_t) { v.x*s, v.y*s };
+}
+
 // squared-distance between two int2_t
 static int32_t squared_distance_i2(int2_t v0, int2_t v1) {
     int2_t d = { v1.x - v0.x, v1.y - v0.y };
@@ -1374,7 +1384,41 @@ static void game_update_ghost_target(ghost_t* ghost) {
             pos = scatter_targets[ghost->type];
             break;
         case GHOSTSTATE_CHASE:
-            // FIXME
+            {
+                const actor_t* pm = &state.game.pacman.actor;
+                const int2_t pm_pos = pixel_to_tile_pos(pm->pos);
+                const int2_t pm_dir = dir_to_vec(pm->dir);
+                switch (ghost->type) {
+                    case GHOSTTYPE_BLINKY:
+                        // Blinky directly chases Pacman
+                        pos = pm_pos;
+                        break;
+                    case GHOSTTYPE_PINKY:
+                        // Pinky target is 4 tiles ahead of Pacman
+                        // FIXME: does not reproduce 'diagonal overflow'
+                        pos = add_i2(pm_pos, mul_i2(pm_dir, 4));
+                        break;
+                    case GHOSTTYPE_INKY:
+                        // Inky targets a position between Blinky and 2 tiles ahead of Pacman
+                        {
+                            const int2_t blinky_pos = pixel_to_tile_pos(state.game.ghost[GHOSTTYPE_BLINKY].actor.pos);
+                            const int2_t p = add_i2(pm_pos, mul_i2(pm_dir, 2));
+                            const int2_t d = sub_i2(p, blinky_pos);
+                            pos = add_i2(blinky_pos, mul_i2(d, 2));
+                        }
+                        break;
+                    case GHOSTTYPE_CLYDE:
+                        // if Clyde is far away from Pacman, he chases Pacman, 
+                        // but if close he moves towards the scatter target
+                        if (squared_distance_i2(pixel_to_tile_pos(ghost->actor.pos), pm_pos) > 64) {
+                            pos = pm_pos;
+                        }
+                        else {
+                            pos = scatter_targets[GHOSTTYPE_CLYDE];
+                        }
+                        break;
+                }
+            }
             break;
         case GHOSTSTATE_FRIGHTENED:
             /* in frightened state just select a random target position

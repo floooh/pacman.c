@@ -783,7 +783,7 @@ bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering) {
     
     // look one tile ahead in movement direction
     const int2_t tile_pos = pixel_to_tile_pos(pos);
-    const int2_t check_pos = clamped_tile_pos(i2(tile_pos.x + dir_vec.x, tile_pos.y + dir_vec.y));
+    const int2_t check_pos = clamped_tile_pos(add_i2(tile_pos, dir_vec));
     const bool is_blocked = is_blocking_tile(check_pos);
     if ((!allow_cornering && (0 != perp_dist_mid)) || (is_blocked && (0 == move_dist_mid))) {
         // way is blocked
@@ -817,7 +817,7 @@ static int2_t move(int2_t pos, dir_t dir, bool allow_cornering) {
     if (pos.x < 0) {
         pos.x = DISPLAY_PIXELS_X - 1;
     }
-    else if (pos.x > DISPLAY_PIXELS_X) {
+    else if (pos.x >= DISPLAY_PIXELS_X) {
         pos.x = 0;
     }
     return pos;
@@ -1085,7 +1085,7 @@ static void game_round_init(void) {
     state.game.pacman = (pacman_t) {
         .actor = {
             .dir = DIR_LEFT, 
-            .pos = { .x = 14 * 8, 26 * 8 + 4 },
+            .pos = { 14*8, 26*8+4 },
         },
     };
     state.gfx.sprite[SPRITE_PACMAN] = (sprite_t) { .enabled=false, .color=COLOR_PACMAN };
@@ -1094,7 +1094,7 @@ static void game_round_init(void) {
     state.game.ghost[GHOSTTYPE_BLINKY] = (ghost_t) {
         .actor = {
             .dir = DIR_LEFT,
-            .pos = { .x = 14*8, .y = 14*8+4 },
+            .pos = { 14*8, 14*8+4 },
         },
         .type = GHOSTTYPE_BLINKY,
         .next_dir = DIR_LEFT,
@@ -1108,7 +1108,7 @@ static void game_round_init(void) {
     state.game.ghost[GHOSTTYPE_PINKY] = (ghost_t) {
         .actor = {
             .dir = DIR_DOWN,
-            .pos = { .x = 14*8, .y = 17*8+4 },
+            .pos = { 14*8, 17*8+4 },
         },
         .type = GHOSTTYPE_PINKY,
         .next_dir = DIR_DOWN,
@@ -1122,7 +1122,7 @@ static void game_round_init(void) {
     state.game.ghost[GHOSTTYPE_INKY] = (ghost_t) {
         .actor = {
             .dir = DIR_UP,
-            .pos = { .x = 12*8, .y = 17*8+4 },
+            .pos = { 12*8, 17*8+4 },
         },
         .type = GHOSTTYPE_INKY,
         .next_dir = DIR_UP,
@@ -1137,7 +1137,7 @@ static void game_round_init(void) {
     state.game.ghost[GHOSTTYPE_CLYDE] = (ghost_t) {
         .actor = {
             .dir = DIR_UP,
-            .pos = { .x = 16*8, .y=17*8+4 },
+            .pos = { 16*8, 17*8+4 },
         },
         .type = GHOSTTYPE_CLYDE,
         .next_dir = DIR_UP, 

@@ -11,7 +11,7 @@
 
 #define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
 #define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
-#define DBG_MARKERS         (1)     // set to (1) to show debug markers
+#define DBG_MARKERS         (0)     // set to (1) to show debug markers
 
 // various constants
 enum {
@@ -34,7 +34,8 @@ enum {
     NUM_DOTS            = 244,  // 240 small dots + 4 pills
     NUM_PILLS           = 4,    // number of energizer pills on playfield
     ANTEPORTAS_X        = 14*TILE_WIDTH,  // pixel position of the house enter/leave point
-    ANTEPORTAS_Y        = 14*TILE_HEIGHT + TILE_HEIGHT/2
+    ANTEPORTAS_Y        = 14*TILE_HEIGHT + TILE_HEIGHT/2,
+    GHOST_EATEN_FREEZE_TICKS = 60   // number of ticks the game freezes after Pacman eats a ghost
 };
 
 // common tile codes
@@ -67,6 +68,8 @@ enum {
     COLOR_CLYDE         = 0x07,
     COLOR_FRIGHTENED    = 0x11,
     COLOR_FRIGHTENED_BLINKING = 0x12,
+    COLOR_GHOST_SCORE   = 0x18,
+    COLOR_EYES          = 0x19,
     COLOR_CHERRIES      = 0x14,
     COLOR_STRAWBERRY    = 0x0F, // FIXME: same as COLOR_DEFAULT?
     COLOR_PEACH         = 0x15,
@@ -109,11 +112,11 @@ typedef enum {
 
 // sprite indices
 typedef enum {
+    SPRITE_PACMAN,
     SPRITE_BLINKY,
     SPRITE_PINKY,
     SPRITE_INKY,
     SPRITE_CLYDE,
-    SPRITE_PACMAN,
     SPRITE_FRUIT,
 } sprite_index_t;
 
@@ -164,6 +167,7 @@ typedef struct {
     int2_t target_pos;
     ghoststate_t state;
     timer_t frightened;
+    timer_t eaten;
     uint8_t dot_counter;    // the ghost's personal dot counter for the ghost-house-logic
 } ghost_t;
 
@@ -217,13 +221,15 @@ static struct {
         timer_t started;
         timer_t prelude_started;
         timer_t round_started;
-        timer_t last_dot_eaten;     // last time Pacman ate a dot
-        timer_t last_pill_eaten;    // last time Pacman ate a pill
+        timer_t dot_eaten;          // last time Pacman ate a dot
+        timer_t pill_eaten;         // last time Pacman ate a pill
+        timer_t ghost_eaten;        // last time Pacman ate a ghost
         timer_t force_leave_house;  // starts when a dot is eaten
-        bool frozen;            // if true the game is currently 'frozen'
-        uint32_t score;         // score / 10
-        uint32_t hiscore;       // hiscore / 10
+        bool frozen;                // if true the game is currently 'frozen'
+        uint32_t score;             // score / 10
+        uint32_t hiscore;           // hiscore / 10
         uint8_t num_lives;
+        uint8_t num_ghosts_eaten;   // number of ghosts easten with current pill
         bool dot_counter_active;    // set to true when Pacman loses a life
         uint8_t dot_counter;        // the global dot counter for the ghost-house-logic
         ghost_t ghost[NUM_GHOSTS];
@@ -244,9 +250,10 @@ static struct {
 
     // the gfx subsystem implements a simple tile+sprite renderer
     struct {
-        // fade-in/out triggers
+        // fade-in/out timers and current value
         timer_t fadein;
         timer_t fadeout;
+        uint8_t fade;
 
         // the 36x28 tile framebuffer
         uint8_t video_ram[DISPLAY_TILES_Y][DISPLAY_TILES_X]; // tile codes
@@ -257,9 +264,6 @@ static struct {
 
         // up to 16 debug markers
         debugmarker_t debug_marker[NUM_DEBUG_MARKERS];
-
-        // current fade value (0: no fade, 255: fully opaque)
-        uint8_t fade;
 
         // sokol-gfx resources
         sg_pass_action pass_action;
@@ -501,6 +505,11 @@ static int32_t squared_distance_i2(int2_t v0, int2_t v1) {
     return d.x * d.x + d.y * d.y;
 }
 
+// check if two int2_t are equal
+static bool equal_i2(int2_t v0, int2_t v1) {
+    return (v0.x == v1.x) && (v0.y == v1.y);
+}
+
 // convert an actor pos (origin at center) to sprite pos (origin top left)
 static int2_t actor_to_sprite_pos(int2_t pos) {
     return i2(pos.x - SPRITE_WIDTH/2, pos.y - SPRITE_HEIGHT/2);
@@ -637,15 +646,30 @@ static void spr_clear(void) {
     memset(&state.gfx.sprite, 0, sizeof(state.gfx.sprite));
 }
 
+// get pointer to pacman sprite
+static sprite_t* spr_pacman(void) {
+    return &state.gfx.sprite[SPRITE_PACMAN];
+}
+
+// get pointer to ghost sprite
+static sprite_t* spr_ghost(ghosttype_t type) {
+    assert((type >= 0) && (type < NUM_GHOSTS));
+    return &state.gfx.sprite[SPRITE_BLINKY + type];
+}
+
+// get pointer to fruit sprite
+static sprite_t* spr_fruit(void) {
+    return &state.gfx.sprite[SPRITE_FRUIT];
+}
+
 // set sprite to animated pacman
-static void spr_anim_pacman(int index, dir_t dir, uint32_t tick) {
-    assert((index >= 0) && (index < NUM_SPRITES));
+static void spr_anim_pacman(dir_t dir, uint32_t tick) {
     // animation frames for horizontal and vertical movement
     static const uint8_t tiles[2][4] = {
         { 44, 46, 48, 46 }, // horizontal (needs flipx)
         { 45, 47, 48, 47 }  // vertical (needs flipy)
     };
-    sprite_t* spr = &state.gfx.sprite[index];
+    sprite_t* spr = spr_pacman();
     uint32_t phase = (tick / 4) & 3;
     spr->tile  = tiles[dir & 1][phase];
     spr->color = COLOR_PACMAN;
@@ -654,8 +678,7 @@ static void spr_anim_pacman(int index, dir_t dir, uint32_t tick) {
 }
 
 // set sprite to animated ghost
-static void spr_anim_ghost(int index, dir_t dir, uint32_t tick) {
-    assert((index >= 0) && (index < NUM_SPRITES));
+static void spr_anim_ghost(ghosttype_t ghost_type, dir_t dir, uint32_t tick) {
     assert((dir >= 0) && (dir < NUM_DIRS));
     static const uint8_t tiles[4][2]  = {
         { 32, 33 }, // right
@@ -664,19 +687,18 @@ static void spr_anim_ghost(int index, dir_t dir, uint32_t tick) {
         { 38, 39 }, // up
     };
     uint32_t phase = (tick / 8) & 1;
-    sprite_t* spr = &state.gfx.sprite[index];
+    sprite_t* spr = spr_ghost(ghost_type);
     spr->tile = tiles[dir][phase];
-    spr->color = COLOR_BLINKY + 2*index;
+    spr->color = COLOR_BLINKY + 2*ghost_type;
     spr->flipx = false;
     spr->flipy = false;
 }
 
 // set sprite to animated, frightened ghost
-static void spr_anim_ghost_frightened(int index, uint32_t tick) {
-    assert((index >= 0) && (index < NUM_SPRITES));
+static void spr_anim_ghost_frightened(ghosttype_t ghost_type, uint32_t tick) {
     static const uint8_t tiles[4] = { 28, 29 };
     uint32_t phase = (tick / 4) & 1;
-    sprite_t* spr = &state.gfx.sprite[index];
+    sprite_t* spr = spr_ghost(ghost_type);
     spr->tile = tiles[phase];
     // FIXME: replace hardwired time offset
     if (tick > 4*60) {
@@ -686,6 +708,20 @@ static void spr_anim_ghost_frightened(int index, uint32_t tick) {
     else {
         spr->color = COLOR_FRIGHTENED;
     }
+    spr->flipx = false;
+    spr->flipy = false;
+}
+
+/* set sprite to ghost eyes, these are the normal ghost sprite
+    images but with a different color code which makes
+    only the eyes visible
+*/
+static void spr_anim_ghost_eyes(ghosttype_t ghost_type, dir_t dir) {
+    assert((dir >= 0) && (dir < NUM_DIRS));
+    static const uint8_t tiles[NUM_DIRS] = { 32, 34, 36, 38 };
+    sprite_t* spr = spr_ghost(ghost_type);
+    spr->tile = tiles[dir];
+    spr->color = COLOR_EYES;
     spr->flipx = false;
     spr->flipy = false;
 }
@@ -935,43 +971,7 @@ static void intro_tick(void) {
         }
     }
 
-    // FIXME: rewrite this with "gameplay code"
-    // the animated chase sequence
-    delay += 60;
-    if (after(state.intro.started, delay)) {
-        start(&state.intro.chase);
-        vid_color_tile(i2(4,20), COLOR_DOT, TILE_PILL);
-        int16_t x = 224;
-        state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = true, .pos = { x+20, 156 }, .color = COLOR_BLINKY };
-        state.gfx.sprite[SPRITE_PINKY]  = (sprite_t) { .enabled = true, .pos = { x+36, 156 }, .color = COLOR_PINKY };
-        state.gfx.sprite[SPRITE_INKY]   = (sprite_t) { .enabled = true, .pos = { x+52, 156 }, .color = COLOR_INKY };
-        state.gfx.sprite[SPRITE_CLYDE]  = (sprite_t) { .enabled = true, .pos = { x+68, 156 }, .color = COLOR_CLYDE };
-        state.gfx.sprite[SPRITE_PACMAN] = (sprite_t) { .enabled = true, .pos = { x,    156 }, .color = COLOR_PACMAN };
-    }
-    // ghosts are chasing pacman...
-    if (between(state.intro.chase, 1, 200)) {
-        for (int i = 0; i < 5; i++) {
-            if (i == SPRITE_PACMAN) { spr_anim_pacman(i, DIR_LEFT, state.tick); }
-            else                    { spr_anim_ghost(i, DIR_LEFT, state.tick); }
-            state.gfx.sprite[i].pos.x--;
-        }
-    }
-    // pacman is chasing and eating ghosts
-    if (between(state.intro.chase, 210, 500)) {
-        for (int i = 0; i < 5; i++) {
-            if (i == SPRITE_PACMAN) {
-                spr_anim_pacman(i, DIR_RIGHT, state.tick);
-                state.gfx.sprite[i].pos.x++;
-            }
-            else {
-                spr_anim_ghost_frightened(i, state.tick);
-                state.gfx.sprite[i].color = COLOR_FRIGHTENED;
-                if (state.tick & 1) {
-                    state.gfx.sprite[i].pos.x++;
-                }
-            }
-        }
-    }
+    // FIXME: animated chase sequence
 
     // if a key is pressed, advance to game state
     if (state.input.anykey) {
@@ -1016,8 +1016,10 @@ static void game_round_init(void) {
     state.game.xorshift = 0x12345678;
     state.game.dot_counter_active = false;
     state.game.dot_counter = 0;
-    disable(&state.game.last_dot_eaten);
-    disable(&state.game.last_pill_eaten);
+    state.game.num_ghosts_eaten = 0;
+    disable(&state.game.dot_eaten);
+    disable(&state.game.pill_eaten);
+    disable(&state.game.ghost_eaten);
     disable(&state.game.force_leave_house);
 
     // draw the playfield
@@ -1100,6 +1102,7 @@ static void game_round_init(void) {
         .next_dir = DIR_LEFT,
         .state = GHOSTSTATE_SCATTER,
         .frightened = disabled_timer(),
+        .eaten = disabled_timer(),
         .dot_counter = 0
     };
     state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = false, .color = COLOR_BLINKY };
@@ -1114,6 +1117,7 @@ static void game_round_init(void) {
         .next_dir = DIR_DOWN,
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
+        .eaten = disabled_timer(),
         .dot_counter = 0,
     };
     state.gfx.sprite[SPRITE_PINKY] = (sprite_t) { .enabled = false, .color = COLOR_PINKY };
@@ -1128,6 +1132,7 @@ static void game_round_init(void) {
         .next_dir = DIR_UP,
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
+        .eaten = disabled_timer(),
         // FIXME: needs to be adjusted by current round!
         .dot_counter = 30,
     };
@@ -1143,6 +1148,7 @@ static void game_round_init(void) {
         .next_dir = DIR_UP, 
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
+        .eaten = disabled_timer(),
         // FIXME: needs to be adjusted by current round!
         .dot_counter = 60,
     };
@@ -1193,26 +1199,45 @@ static void game_update_tiles(void) {
 
 static void game_update_sprites(void) {
     // update Pacman sprite
-    if (state.gfx.sprite[SPRITE_PACMAN].enabled) {
-        const actor_t* actor = &state.game.pacman.actor;
-        state.gfx.sprite[SPRITE_PACMAN].pos = actor_to_sprite_pos(actor->pos);
-        if (state.game.frozen) {
-            state.gfx.sprite[SPRITE_PACMAN].tile = 48;
-        }
-        else {
-            spr_anim_pacman(SPRITE_PACMAN, actor->dir, actor->anim_tick);
+    {
+        sprite_t* spr = spr_pacman();
+        if (spr->enabled) {
+            const actor_t* actor = &state.game.pacman.actor;
+            spr->pos = actor_to_sprite_pos(actor->pos);
+            if (state.game.frozen) {
+                if (state.game.num_ghosts_eaten != 0) {
+                    // hide Pacman shortly after he's eaten a ghost, hide Pacman (invisible Sprite tile)
+                    spr->tile = 30;
+                }
+                else {
+                    // special case game frozen at start of round, fully round Pacman
+                    spr->tile = 48;
+                }
+            }
+            else {
+                spr_anim_pacman(actor->dir, actor->anim_tick);
+            }
         }
     }
 
     // update ghost sprites
     for (int i = 0; i < NUM_GHOSTS; i++) {
-        if (state.gfx.sprite[i].enabled) {
+        sprite_t* sprite = spr_ghost(i);
+        if (sprite->enabled) {
             const ghost_t* ghost = &state.game.ghost[i];
-            state.gfx.sprite[i].pos = actor_to_sprite_pos(ghost->actor.pos);
+            sprite->pos = actor_to_sprite_pos(ghost->actor.pos);
             switch (ghost->state) {
                 case GHOSTSTATE_EYES:
-                    // FIXME!
-                    spr_anim_ghost_frightened(i, ghost->actor.anim_tick);
+                    if (since(ghost->eaten) < GHOST_EATEN_FREEZE_TICKS) {
+                        // show the ghost-eaten-score, sprite index 40 is the '200'
+                        // sprite image, followed by '400', '800' and '1600'
+                        sprite->tile = 40 + state.game.num_ghosts_eaten - 1;
+                        sprite->color = COLOR_GHOST_SCORE;
+                    }
+                    else {
+                        // show regular moving eyes
+                        spr_anim_ghost_eyes(i, ghost->next_dir);
+                    }
                     break;
                 case GHOSTSTATE_FRIGHTENED:
                     // FIXME: ghost show the frightened visualization also
@@ -1232,11 +1257,11 @@ static void game_update_sprites(void) {
 
 // return true if Pacman should move in this tick
 static bool game_pacman_should_move(void) {
-    if (now(state.game.last_dot_eaten)) {
+    if (now(state.game.dot_eaten)) {
         // eating a dot causes Pacman to stop for 1 tick
         return false;
     }
-    else if (since(state.game.last_pill_eaten) < 3) {
+    else if (since(state.game.pill_eaten) < 3) {
         // eating an energizer pill causes Pacman to stop for 3 ticks
         return false;
     }
@@ -1572,16 +1597,34 @@ static void game_update_actors(void) {
         if (is_dot(tile_pos)) {
             vid_tile(tile_pos, TILE_SPACE);
             state.game.score += 1;
-            start(&state.game.last_dot_eaten);
+            start(&state.game.dot_eaten);
             start(&state.game.force_leave_house);
             game_update_dot_counters();
         }
         if (is_pill(tile_pos)) {
             vid_tile(tile_pos, TILE_SPACE);
             state.game.score += 5;
-            start(&state.game.last_pill_eaten);
+            state.game.num_ghosts_eaten = 0;
+            start(&state.game.pill_eaten);
             for (int i = 0; i < NUM_GHOSTS; i++) {
                 start(&state.game.ghost[i].frightened);
+            }
+        }
+        // check if Pacman collides with any ghost
+        for (int i = 0; i < NUM_GHOSTS; i++) {
+            ghost_t* ghost = &state.game.ghost[i];
+            const int2_t ghost_tile_pos = pixel_to_tile_pos(ghost->actor.pos);
+            if (equal_i2(tile_pos, ghost_tile_pos)) {
+                if (ghost->state == GHOSTSTATE_FRIGHTENED) {
+                    ghost->state = GHOSTSTATE_EYES;
+                    start(&ghost->eaten);
+                    start(&state.game.ghost_eaten);
+                    state.game.num_ghosts_eaten++;
+                    state.game.frozen = true;
+                }
+                else if ((ghost->state == GHOSTSTATE_CHASE) || (ghost->state == GHOSTSTATE_SCATTER)) {
+                    // FIXME: Pacman dies
+                }
             }
         }
     }
@@ -1625,8 +1668,9 @@ static void game_tick(void) {
     // after 3 seconds, make actors visible, remove "PLAYER ONE"
     if (after(state.game.prelude_started, 3*ticks_per_sec)) {
         vid_color_text(i2(9,14), 0x10, "          ");
-        for (int i = 0; i < NUM_GHOSTS+1; i++) {
-            state.gfx.sprite[i].enabled = true;
+        spr_pacman()->enabled = true;
+        for (int i = 0; i < NUM_GHOSTS; i++) {
+            spr_ghost(i)->enabled = true;
         }
         if (NUM_LIVES == state.game.num_lives) {
             state.game.num_lives = NUM_LIVES - 1;
@@ -1640,6 +1684,13 @@ static void game_tick(void) {
         state.game.frozen = false;
         // clear the 'READY!' message
         vid_color_text(i2(11,20), 0x10, "      ");
+    }
+
+    // if game is frozen because Pacman ate a ghost, unfreeze after a while
+    if (state.game.frozen) {
+        if (after(state.game.ghost_eaten, GHOST_EATEN_FREEZE_TICKS)) {
+            state.game.frozen = false;
+        }
     }
 
     if (!state.game.frozen) {

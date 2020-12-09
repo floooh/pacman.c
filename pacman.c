@@ -1620,6 +1620,7 @@ static void game_update_actors(void) {
                     start(&ghost->eaten);
                     start(&state.game.ghost_eaten);
                     state.game.num_ghosts_eaten++;
+                    state.game.score += 10 * (1<<state.game.num_ghosts_eaten);
                     state.game.frozen = true;
                 }
                 else if ((ghost->state == GHOSTSTATE_CHASE) || (ghost->state == GHOSTSTATE_SCATTER)) {

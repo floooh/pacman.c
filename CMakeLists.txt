@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.0)
 project(pacman)
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 11)
 source_group(" " .*)
 
 #=== LIBRARY: sokol
@@ -35,10 +34,7 @@ else()
     add_executable(pacman pacman.c)
 endif()
 target_link_libraries(pacman sokol)
-# this hack removes the xxx-CMakeForceLinker.cxx dummy file
-set_target_properties(pacman PROPERTIES LINKER_LANGUAGE C)
 # explicitly strip dead code
 if (CMAKE_C_COMPILER_ID MATCHES "Clang")
-    message("Enable -dead_strip")
     target_link_options(pacman PRIVATE LINKER:-dead_strip)
 endif()

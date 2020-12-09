@@ -1553,7 +1553,6 @@ static void game_update_actors(void) {
     // FIXME: check if the next ghost is forced out of the house
 
     // Pacman "AI"
-    // FIXME: for now hardwire to 80% speed (skip every 5th frame), this needs to be looked up in a table
     if (game_pacman_should_move()) {
         // move Pacman with cornering allowed
         actor_t* actor = &state.game.pacman.actor;
@@ -1592,8 +1591,8 @@ static void game_update_actors(void) {
         ghost_t* ghost = &state.game.ghost[ghost_index];
         // handle ghost-state transitions
         game_update_ghost_state(ghost);
-        const int num_move_ticks = game_ghost_speed(ghost);
         game_update_ghost_target(ghost);
+        const int num_move_ticks = game_ghost_speed(ghost);
         for (int i = 0; i < num_move_ticks; i++) {
             bool force_move = game_update_ghost_dir(ghost);
             actor_t* actor = &ghost->actor;

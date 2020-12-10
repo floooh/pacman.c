@@ -1266,6 +1266,9 @@ static void game_update_sprites(void) {
                         spr_anim_ghost_eyes(i, ghost->next_dir);
                     }
                     break;
+                case GHOSTSTATE_ENTERHOUSE:
+                    spr_anim_ghost_eyes(i, ghost->actor.dir);
+                    break;
                 case GHOSTSTATE_FRIGHTENED:
                     // FIXME: ghost show the frightened visualization also
                     // in the 'house-states'

@@ -8,6 +8,7 @@
 #include "sokol_glue.h"
 #include <assert.h>
 #include <string.h> // memset()
+#include <math.h>   // fabs()
 
 #define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
 #define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
@@ -292,6 +293,27 @@ static struct {
     } gfx;
 } state;
 
+// scatter target positions (in tile coords)
+static const int2_t ghost_scatter_targets[NUM_GHOSTS] = {
+    { 25, 0 }, { 2, 0 }, { 27, 34 }, { 0, 34 }
+};
+
+// starting positions for ghosts (pixel coords)
+static const int2_t ghost_starting_pos[NUM_GHOSTS] = {
+    { 14*8, 14*8 + 4 },
+    { 14*8, 17*8 + 4 },
+    { 12*8, 17*8 + 4 },
+    { 16*8, 17*8 + 4 },
+};
+
+// target positions for ghost entering the ghost house (pixel coords)
+static const int2_t ghost_house_target_pos[NUM_GHOSTS] = {
+    { 14*8, 17*8 + 4 },
+    { 14*8, 17*8 + 4 },
+    { 12*8, 17*8 + 4 },
+    { 16*8, 17*8 + 4 },
+};
+
 // forward declarations
 static void init(void);
 static void frame(void);
@@ -508,6 +530,11 @@ static int32_t squared_distance_i2(int2_t v0, int2_t v1) {
 // check if two int2_t are equal
 static bool equal_i2(int2_t v0, int2_t v1) {
     return (v0.x == v1.x) && (v0.y == v1.y);
+}
+
+// check if two int2_t are nearly equal
+static bool nearequal_i2(int2_t v0, int2_t v1, int16_t tolerance) {
+    return (fabs(v1.x - v0.x) <= tolerance) && (fabs(v1.y - v0.y) <= tolerance);
 }
 
 // convert an actor pos (origin at center) to sprite pos (origin top left)
@@ -1096,7 +1123,7 @@ static void game_round_init(void) {
     state.game.ghost[GHOSTTYPE_BLINKY] = (ghost_t) {
         .actor = {
             .dir = DIR_LEFT,
-            .pos = { 14*8, 14*8+4 },
+            .pos = ghost_starting_pos[GHOSTTYPE_BLINKY],
         },
         .type = GHOSTTYPE_BLINKY,
         .next_dir = DIR_LEFT,
@@ -1111,7 +1138,7 @@ static void game_round_init(void) {
     state.game.ghost[GHOSTTYPE_PINKY] = (ghost_t) {
         .actor = {
             .dir = DIR_DOWN,
-            .pos = { 14*8, 17*8+4 },
+            .pos = ghost_starting_pos[GHOSTTYPE_PINKY],
         },
         .type = GHOSTTYPE_PINKY,
         .next_dir = DIR_DOWN,
@@ -1126,7 +1153,7 @@ static void game_round_init(void) {
     state.game.ghost[GHOSTTYPE_INKY] = (ghost_t) {
         .actor = {
             .dir = DIR_UP,
-            .pos = { 12*8, 17*8+4 },
+            .pos = ghost_starting_pos[GHOSTTYPE_INKY],
         },
         .type = GHOSTTYPE_INKY,
         .next_dir = DIR_UP,
@@ -1142,7 +1169,7 @@ static void game_round_init(void) {
     state.game.ghost[GHOSTTYPE_CLYDE] = (ghost_t) {
         .actor = {
             .dir = DIR_UP,
-            .pos = { 16*8, 17*8+4 },
+            .pos = ghost_starting_pos[GHOSTTYPE_CLYDE],
         },
         .type = GHOSTTYPE_CLYDE,
         .next_dir = DIR_UP, 
@@ -1284,13 +1311,13 @@ static int game_ghost_speed(const ghost_t* ghost) {
     switch (ghost->state) {
         case GHOSTSTATE_HOUSE:
         case GHOSTSTATE_LEAVEHOUSE:
-        case GHOSTSTATE_ENTERHOUSE:
             // inside house at half speed (estimated)
             return state.tick & 1;
         case GHOSTSTATE_FRIGHTENED:
             // move at 50% speed when frightened
             return state.tick & 1;
         case GHOSTSTATE_EYES:
+        case GHOSTSTATE_ENTERHOUSE:
             // estimated 1.5x when hollow, Pacman Dossier is silent on this
             return (state.tick & 1) ? 1 : 2;
         default:
@@ -1323,10 +1350,17 @@ static void game_update_ghost_state(ghost_t* ghost) {
     ghoststate_t new_state = ghost->state;
     switch (ghost->state) {
         case GHOSTSTATE_EYES:
-            // FIXME
+            // if the target position has been reached, switch to ENTERHOUSE state
+            // eye state moves 2 pixels per tick, so we need to be a bit fuzzy
+            // when checking the target position
+            if (nearequal_i2(ghost->actor.pos, i2(ANTEPORTAS_X, ANTEPORTAS_Y), 1)) {
+                new_state = GHOSTSTATE_ENTERHOUSE;
+            }
             break;
         case GHOSTSTATE_ENTERHOUSE:
-            // FIXME
+            if (nearequal_i2(ghost->actor.pos, ghost_house_target_pos[ghost->type], 1)) {
+                new_state = GHOSTSTATE_LEAVEHOUSE;
+            }
             break;
         case GHOSTSTATE_HOUSE:
             if (after(state.game.force_leave_house, 4*60)) {
@@ -1384,15 +1418,19 @@ static void game_update_ghost_state(ghost_t* ghost) {
                 ghost->next_dir = ghost->actor.dir = DIR_LEFT;
                 break;
             case GHOSTSTATE_ENTERHOUSE:
-                // after entering the ghost house, start moving up and down
-                ghost->next_dir = ghost->actor.dir = DIR_DOWN;
+                // a ghost that was eaten is immune to frightened
+                // until Pacman eats enother pill
+                disable(&ghost->frightened);
                 break;
             case GHOSTSTATE_FRIGHTENED:
                 // don't reverse direction when leaving frightened state
                 break;
-            default:
-                // all other state transition cause a reverse of direction
+            case GHOSTSTATE_SCATTER:
+            case GHOSTSTATE_CHASE:
+                // any transition from scatter and chase mode causes a reversal of direction
                 ghost->next_dir = reverse_dir(ghost->actor.dir);
+                break;
+            default:
                 break;
         }
         ghost->state = new_state;
@@ -1402,11 +1440,10 @@ static void game_update_ghost_state(ghost_t* ghost) {
 static void game_update_ghost_target(ghost_t* ghost) {
     assert(ghost);
     int2_t pos = ghost->target_pos;
-    static const int2_t scatter_targets[NUM_GHOSTS] = { { 25, 0 }, { 2, 0 }, { 27, 34 }, { 0, 34 } };
     switch (ghost->state) {
         case GHOSTSTATE_SCATTER:
             assert((ghost->type >= 0) && (ghost->type < NUM_GHOSTS));
-            pos = scatter_targets[ghost->type];
+            pos = ghost_scatter_targets[ghost->type];
             break;
         case GHOSTSTATE_CHASE:
             {
@@ -1440,7 +1477,7 @@ static void game_update_ghost_target(ghost_t* ghost) {
                             pos = pm_pos;
                         }
                         else {
-                            pos = scatter_targets[GHOSTTYPE_CLYDE];
+                            pos = ghost_scatter_targets[GHOSTTYPE_CLYDE];
                         }
                         break;
                     default:
@@ -1457,7 +1494,7 @@ static void game_update_ghost_target(ghost_t* ghost) {
             break;
         case GHOSTSTATE_EYES:
             // move towards the ghost house door
-            pos = i2(13, 15);
+            pos = i2(13, 14);
             break;
         default:
             break;
@@ -1506,7 +1543,23 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
         ghost->actor.dir = ghost->next_dir;
         return true;
     }
+    // navigate towards the ghost house target pos
     else if (ghost->state == GHOSTSTATE_ENTERHOUSE) {
+        const int2_t pos = ghost->actor.pos;
+        const int2_t tile_pos = pixel_to_tile_pos(pos);
+        const int2_t tgt_pos = ghost_house_target_pos[ghost->type];
+        if (tile_pos.y == 14) {
+            if (pos.x != ANTEPORTAS_X) {
+                ghost->next_dir = (pos.x < ANTEPORTAS_X) ? DIR_RIGHT:DIR_LEFT;
+            }
+            else {
+                ghost->next_dir = DIR_DOWN;
+            }
+        }
+        else if (pos.y == tgt_pos.y) {
+            ghost->next_dir = (pos.x < tgt_pos.x) ? DIR_RIGHT:DIR_LEFT;
+        }
+        ghost->actor.dir = ghost->next_dir;
         return true;
     }
     // scatter/chase/frightened: just head towards the current target point

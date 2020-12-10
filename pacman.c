@@ -825,7 +825,7 @@ static bool is_pill(int2_t tile_pos) {
 
 // check if a tile position is in the teleport tunnel
 static bool is_tunnel(int2_t tile_pos) {
-    return (tile_pos.y == 17) && (tile_pos.x <= 5) && (tile_pos.x >= 22);
+    return (tile_pos.y == 17) && ((tile_pos.x <= 5) || (tile_pos.x >= 22));
 }
 
 // test if movement from a pixel position in a wanted direction is possible 

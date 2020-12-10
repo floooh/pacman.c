@@ -1206,7 +1206,7 @@ static void game_update_sprites(void) {
             spr->pos = actor_to_sprite_pos(actor->pos);
             if (state.game.frozen) {
                 if (state.game.num_ghosts_eaten != 0) {
-                    // hide Pacman shortly after he's eaten a ghost, hide Pacman (invisible Sprite tile)
+                    // hide Pacman shortly after he's eaten a ghost (via an invisible Sprite tile)
                     spr->tile = 30;
                 }
                 else {

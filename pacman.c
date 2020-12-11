@@ -17,6 +17,7 @@
 
 // various constants
 enum {
+    DISABLED_TICKS      = 0xFFFFFFFF,   // magic tick value for a disabled timer
     TILE_WIDTH          = 8,
     TILE_HEIGHT         = 8,
     SPRITE_WIDTH        = 16,
@@ -37,7 +38,9 @@ enum {
     NUM_PILLS           = 4,    // number of energizer pills on playfield
     ANTEPORTAS_X        = 14*TILE_WIDTH,  // pixel position of the house enter/leave point
     ANTEPORTAS_Y        = 14*TILE_HEIGHT + TILE_HEIGHT/2,
-    GHOST_EATEN_FREEZE_TICKS = 60   // number of ticks the game freezes after Pacman eats a ghost
+    GHOST_EATEN_FREEZE_TICKS = 60,      // number of ticks the game freezes after Pacman eats a ghost
+    PACMAN_EATEN_TICKS  = 90, // number of ticks to freeze game when Pacman is eaten
+    PACMAN_DEATH_TICKS  = 2*60, // number of ticks to show the Pacman sequence before starting new round
 };
 
 // common tile codes
@@ -446,12 +449,12 @@ static void start_after(timer_t* t, uint32_t ticks) {
 
 // deactivate a timer
 static void disable(timer_t* t) {
-    t->tick = 0xFFFFFFFF;
+    t->tick = DISABLED_TICKS;
 }
 
 // return a disabled timer
 static timer_t disabled_timer(void) {
-    return (timer_t) { .tick = 0xFFFFFFFF };
+    return (timer_t) { .tick = DISABLED_TICKS };
 }
 
 // check if a timer is triggered
@@ -465,20 +468,47 @@ static uint32_t since(timer_t t) {
         return state.tick - t.tick;
     }
     else {
-        return 0xFFFFFFFF;
+        return DISABLED_TICKS;
     }
 }
 
 // check if a timer is between begin and end tick
 static bool between(timer_t t, uint32_t begin, uint32_t end) {
     assert((begin >= 0) && (begin < end));
-    uint32_t ticks = since(t);
-    return (ticks >= begin) && (ticks < end);
+    if (t.tick != DISABLED_TICKS) {
+        uint32_t ticks = since(t);
+        return (ticks >= begin) && (ticks < end);
+    }
+    else {
+        return false;
+    }
 }
 
-// check if a timer was triggered N ticks ago
-static bool after(timer_t t, uint32_t ticks) {
+// check if a timer was triggered exactly N ticks ago
+static bool after_once(timer_t t, uint32_t ticks) {
     return since(t) == ticks;
+}
+
+// check if a timer was trigger more then N ticks ago
+static bool after(timer_t t, uint32_t ticks) {
+    uint32_t s = since(t);
+    if (s != DISABLED_TICKS) {
+        return s >= ticks;
+    }
+    else {
+        return false;
+    }
+}
+
+// same as between(t, 0, ticks)
+static bool before(timer_t t, uint32_t ticks) {
+    uint32_t s = since(t);
+    if (s != DISABLED_TICKS) {
+        return s < ticks;
+    }
+    else {
+        return false;
+    }
 }
 
 // clear input state and disable input
@@ -716,11 +746,12 @@ static void spr_anim_pacman(dir_t dir, uint32_t tick) {
 // set sprite to Pacman's death sequence
 static void spr_anim_pacman_death(uint32_t tick) {
     // the death animation tile sequence starts at sprite tile number
-    // 52 and ends at 63
+    // 52 and ends at 62
     sprite_t* spr = spr_pacman();
-    uint32_t tile = 52 + (tick / 4);
-    if (tile > 63) {
-        tile = 63;
+    // show the first frame a little bit longer
+    uint32_t tile = (tick < 24) ? 52 : 52 + ((tick - 24) / 8);
+    if (tile > 62) {
+        tile = 62;
     }
     spr->tile = tile;
 }
@@ -981,19 +1012,19 @@ static void intro_tick(void) {
         const uint8_t y = 3*i + 6;
         // 2*3 ghost image created from tiles (no sprite!)
         delay += 30;
-        if (after(state.intro.started, delay)) {
+        if (after_once(state.intro.started, delay)) {
             vid_color_tile(i2(4,y+0), color, TILE_GHOST+0); vid_color_tile(i2(5,y+0), color, TILE_GHOST+1);
             vid_color_tile(i2(4,y+1), color, TILE_GHOST+2); vid_color_tile(i2(5,y+1), color, TILE_GHOST+3);
             vid_color_tile(i2(4,y+2), color, TILE_GHOST+4); vid_color_tile(i2(5,y+2), color, TILE_GHOST+5);
         }
         // after 1 second, the name of the ghost
         delay += 60;
-        if (after(state.intro.started, delay)) {
+        if (after_once(state.intro.started, delay)) {
             vid_color_text(i2(7,y+1), color, names[i]);
         }
         // after 0.5 seconds, the nickname of the ghost
         delay += 30;
-        if (after(state.intro.started, delay)) {
+        if (after_once(state.intro.started, delay)) {
             vid_color_text(i2(17,y+1), color, nicknames[i]);
         }
     }
@@ -1001,7 +1032,7 @@ static void intro_tick(void) {
     // . 10 PTS
     // O 50 PTS
     delay += 60;
-    if (after(state.intro.started, delay)) {
+    if (after_once(state.intro.started, delay)) {
         vid_color_tile(i2(10,24), COLOR_DOT, TILE_DOT);
         vid_text(i2(12,24), "10 \x5D\x5E\x5F");
         vid_color_tile(i2(10,26), COLOR_DOT, TILE_PILL);
@@ -1010,7 +1041,7 @@ static void intro_tick(void) {
 
     // blinking "press any key" text
     delay += 60;
-    if (since(state.intro.started) > delay) {
+    if (after(state.intro.started, delay)) {
         if (since(state.intro.started) & 0x20) {
             vid_color_text(i2(3,31), 3, "                       ");
         }
@@ -1262,8 +1293,8 @@ static void game_update_sprites(void) {
                 spr->tile = 48;
             }
             else if (state.game.freeze & FREEZETYPE_DEAD) {
-                if (since(state.game.pacman_eaten) > 2*60) {
-//                    spr_anim_pacman_death(since(state.game.pacman_eaten) - 2*60);
+                if (after(state.game.pacman_eaten, PACMAN_DEATH_TICKS)) {
+                    spr_anim_pacman_death(since(state.game.pacman_eaten) - 2*60);
                 }
             }
             else {
@@ -1280,13 +1311,13 @@ static void game_update_sprites(void) {
             sprite->pos = actor_to_sprite_pos(ghost->actor.pos);
             // if Pacman has just died, ghosts are switched to invisible
             if (state.game.freeze & FREEZETYPE_DEAD) {
-                if (since(state.game.pacman_eaten) > 2*60) {
+                if (after(state.game.pacman_eaten, PACMAN_DEATH_TICKS)) {
                     sprite->tile = 30;  // invisible sprite tile
                 }
             }
             else switch (ghost->state) {
                 case GHOSTSTATE_EYES:
-                    if (since(ghost->eaten) < GHOST_EATEN_FREEZE_TICKS) {
+                    if (before(ghost->eaten, GHOST_EATEN_FREEZE_TICKS)) {
                         // show the ghost-eaten-score, sprite index 40 is the '200'
                         // sprite image, followed by '400', '800' and '1600'
                         sprite->tile = 40 + state.game.num_ghosts_eaten - 1;
@@ -1397,7 +1428,7 @@ static void game_update_ghost_state(ghost_t* ghost) {
             }
             break;
         case GHOSTSTATE_HOUSE:
-            if (after(state.game.force_leave_house, 4*60)) {
+            if (after_once(state.game.force_leave_house, 4*60)) {
                 // if Pacman hasn't eaten dots for 4 seconds, the next ghost
                 // is forced out of the house
                 // FIXME: time is reduced to 3 seconds after round 5
@@ -1431,13 +1462,13 @@ static void game_update_ghost_state(ghost_t* ghost) {
             break;
         case GHOSTSTATE_FRIGHTENED:
             // FIXME: length of frightened period is variable
-            if (since(ghost->frightened) >  6*60) {
+            if (after(ghost->frightened, 6*60)) {
                 new_state = game_scatter_chase_phase();
             }
             break;
         default:
             // FIXME: length of frightened period is variable
-            if (since(ghost->frightened) < 6*60) {
+            if (before(ghost->frightened, 6*60)) {
                 new_state = GHOSTSTATE_FRIGHTENED;
             }
             else {
@@ -1757,7 +1788,7 @@ static void game_tick(void) {
         const int ticks_per_sec = 60;
     #endif
     // after 3 seconds, make actors visible, remove "PLAYER ONE"
-    if (after(state.game.prelude_started, 3*ticks_per_sec)) {
+    if (after_once(state.game.prelude_started, 3*ticks_per_sec)) {
         vid_color_text(i2(9,14), 0x10, "          ");
         spr_pacman()->enabled = true;
         for (int i = 0; i < NUM_GHOSTS; i++) {
@@ -1768,7 +1799,7 @@ static void game_tick(void) {
         }
     }
     // after 5 seconds, the interactive game starts
-    if (after(state.game.prelude_started, 5*ticks_per_sec)) {
+    if (after_once(state.game.prelude_started, 5*ticks_per_sec)) {
         start(&state.game.round_started);
     }
     if (now(state.game.round_started)) {
@@ -1779,7 +1810,7 @@ static void game_tick(void) {
 
     // if game is frozen because Pacman ate a ghost, unfreeze after a while
     if (state.game.freeze & FREEZETYPE_EAT_GHOST) {
-        if (after(state.game.ghost_eaten, GHOST_EATEN_FREEZE_TICKS)) {
+        if (after_once(state.game.ghost_eaten, GHOST_EATEN_FREEZE_TICKS)) {
             state.game.freeze &= ~FREEZETYPE_EAT_GHOST;
         }
     }
@@ -2371,14 +2402,14 @@ static void gfx_fade(void) {
         float t = (float)since(state.gfx.fadein) / FADE_TICKS;
         state.gfx.fade = (uint8_t) (255.0f * (1.0f - t));
     }
-    if (after(state.gfx.fadein, FADE_TICKS)) {
+    if (after_once(state.gfx.fadein, FADE_TICKS)) {
         state.gfx.fade = 0;
     }
     if (between(state.gfx.fadeout, 0, FADE_TICKS)) {
         float t = (float)since(state.gfx.fadeout) / FADE_TICKS;
         state.gfx.fade = (uint8_t) (255.0f * t);
     }
-    if (after(state.gfx.fadeout, FADE_TICKS)) {
+    if (after_once(state.gfx.fadeout, FADE_TICKS)) {
         state.gfx.fade = 255;
     }
 }

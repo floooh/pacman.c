@@ -5,7 +5,7 @@ A Pacman clone written in C99 with minimal dependencies for Windows, macOS and L
 For implementation details see comments in the pacman.c source file (I've tried
 to structure the source code so that it can be read from top to bottom).
 
-## Clone and Build and Run
+## Clone, Build and Run
 
 On the command line:
 

@@ -11,8 +11,9 @@
 #include <stdlib.h> // abs()
 
 #define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
-#define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
+#define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
+#define DBG_GODMODE         (0)     // set to (1) to disable dying
 
 // various constants
 enum {
@@ -232,6 +233,7 @@ static struct {
         timer_t dot_eaten;          // last time Pacman ate a dot
         timer_t pill_eaten;         // last time Pacman ate a pill
         timer_t ghost_eaten;        // last time Pacman ate a ghost
+        timer_t pacman_eaten;       // last time Pacman was eaten by a ghost
         timer_t force_leave_house;  // starts when a dot is eaten
         uint8_t freeze;             // combination of FREEZETYPE_* flags
         uint32_t score;             // score / 10
@@ -696,7 +698,7 @@ static sprite_t* spr_fruit(void) {
     return &state.gfx.sprite[SPRITE_FRUIT];
 }
 
-// set sprite to animated pacman
+// set sprite to animated Pacman
 static void spr_anim_pacman(dir_t dir, uint32_t tick) {
     // animation frames for horizontal and vertical movement
     static const uint8_t tiles[2][4] = {
@@ -709,6 +711,18 @@ static void spr_anim_pacman(dir_t dir, uint32_t tick) {
     spr->color = COLOR_PACMAN;
     spr->flipx = (dir == DIR_LEFT);
     spr->flipy = (dir == DIR_UP);
+}
+
+// set sprite to Pacman's death sequence
+static void spr_anim_pacman_death(uint32_t tick) {
+    // the death animation tile sequence starts at sprite tile number
+    // 52 and ends at 63
+    sprite_t* spr = spr_pacman();
+    uint32_t tile = 52 + (tick / 4);
+    if (tile > 63) {
+        tile = 63;
+    }
+    spr->tile = tile;
 }
 
 // set sprite to animated ghost
@@ -1054,6 +1068,7 @@ static void game_round_init(void) {
     disable(&state.game.dot_eaten);
     disable(&state.game.pill_eaten);
     disable(&state.game.ghost_eaten);
+    disable(&state.game.pacman_eaten);
     disable(&state.game.force_leave_house);
 
     // draw the playfield
@@ -1246,6 +1261,11 @@ static void game_update_sprites(void) {
                 // special case game frozen at start of round, show Pacman with 'closed mouth'
                 spr->tile = 48;
             }
+            else if (state.game.freeze & FREEZETYPE_DEAD) {
+                if (since(state.game.pacman_eaten) > 2*60) {
+//                    spr_anim_pacman_death(since(state.game.pacman_eaten) - 2*60);
+                }
+            }
             else {
                 spr_anim_pacman(actor->dir, actor->anim_tick);
             }
@@ -1258,7 +1278,13 @@ static void game_update_sprites(void) {
         if (sprite->enabled) {
             const ghost_t* ghost = &state.game.ghost[i];
             sprite->pos = actor_to_sprite_pos(ghost->actor.pos);
-            switch (ghost->state) {
+            // if Pacman has just died, ghosts are switched to invisible
+            if (state.game.freeze & FREEZETYPE_DEAD) {
+                if (since(state.game.pacman_eaten) > 2*60) {
+                    sprite->tile = 30;  // invisible sprite tile
+                }
+            }
+            else switch (ghost->state) {
                 case GHOSTSTATE_EYES:
                     if (since(ghost->eaten) < GHOST_EATEN_FREEZE_TICKS) {
                         // show the ghost-eaten-score, sprite index 40 is the '200'
@@ -1686,7 +1712,9 @@ static void game_update_actors(void) {
                     state.game.freeze |= FREEZETYPE_EAT_GHOST;
                 }
                 else if ((ghost->state == GHOSTSTATE_CHASE) || (ghost->state == GHOSTSTATE_SCATTER)) {
-                    // FIXME: Pacman dies
+                    // Pacman dies
+                    start(&state.game.pacman_eaten);
+                    state.game.freeze |= FREEZETYPE_DEAD;
                 }
             }
         }

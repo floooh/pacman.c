@@ -8,7 +8,7 @@
 #include "sokol_glue.h"
 #include <assert.h>
 #include <string.h> // memset()
-#include <math.h>   // fabs()
+#include <stdlib.h> // abs()
 
 #define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
 #define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
@@ -534,7 +534,7 @@ static bool equal_i2(int2_t v0, int2_t v1) {
 
 // check if two int2_t are nearly equal
 static bool nearequal_i2(int2_t v0, int2_t v1, int16_t tolerance) {
-    return (fabs(v1.x - v0.x) <= tolerance) && (fabs(v1.y - v0.y) <= tolerance);
+    return (abs(v1.x - v0.x) <= tolerance) && (abs(v1.y - v0.y) <= tolerance);
 }
 
 // convert an actor pos (origin at center) to sprite pos (origin top left)

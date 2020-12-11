@@ -18,6 +18,8 @@ cmake ..
 cmake --build .
 ```
 
+> NOTE: on Linux you'll need to install the OpenGL and X11 development packages (e.g. mesa-common-dev and libx11-dev).
+
 On Mac and Linux this will create an executable called 'pacman'
 in the build directory:
 

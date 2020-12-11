@@ -1934,6 +1934,49 @@ static void gfx_create_resources(void) {
                 "  return tex.Sample(smp, uv);\n"
                 "}\n";
             break;
+        case SG_BACKEND_GLCORE33:
+            offscreen_vs_src =
+                "#version 330\n"
+                "layout(location=0) in vec4 pos;\n"
+                "layout(location=1) in vec2 uv_in;\n"
+                "layout(location=2) in vec4 data_in;\n"
+                "out vec2 uv;\n"
+                "out vec4 data;\n"
+                "void main() {\n"
+                "  gl_Position = vec4((pos.xy - 0.5) * vec2(2.0, -2.0), 0.5, 1.0);\n"
+                "  uv  = uv_in;"
+                "  data = data_in;\n"
+                "}\n";
+            offscreen_fs_src =
+                "#version 330\n"
+                "uniform sampler2D tile_tex;\n"
+                "uniform sampler2D pal_tex;\n"
+                "in vec2 uv;\n"
+                "in vec4 data;\n"
+                "out vec4 frag_color;\n"
+                "void main() {\n"
+                "  float color_code = data.x;\n"
+                "  float tile_color = texture(tile_tex, uv).x;\n"
+                "  vec2 pal_uv = vec2(color_code * 4 + tile_color, 0);\n"
+                "  frag_color = texture(pal_tex, pal_uv) * vec4(1, 1, 1, data.y);\n"
+                "}\n";
+            display_vs_src =
+                "#version 330\n"
+                "layout(location=0) in vec4 pos;\n"
+                "out vec2 uv;\n"
+                "void main() {\n"
+                "  gl_Position = vec4((pos.xy - 0.5) * 2.0, 0.0, 1.0);\n"
+                "  uv = pos.xy;\n"
+                "}\n";
+            display_fs_src =
+                "#version 330\n"
+                "uniform sampler2D tex;\n"
+                "in vec2 uv;\n"
+                "out vec4 frag_color;\n"
+                "void main() {\n"
+                "  frag_color = texture(tex, uv);\n"
+                "}\n";
+                break;
         default:
             assert(false);
     }
@@ -1948,8 +1991,8 @@ static void gfx_create_resources(void) {
             },
             .vs.source = offscreen_vs_src,
             .fs = {
-                .images[0].type = SG_IMAGETYPE_2D,
-                .images[1].type = SG_IMAGETYPE_2D,
+                .images[0] = { .name="tile_tex", .type = SG_IMAGETYPE_2D },
+                .images[1] = { .name="pal_tex", .type = SG_IMAGETYPE_2D },
                 .source = offscreen_fs_src
             }
         }),
@@ -1975,7 +2018,7 @@ static void gfx_create_resources(void) {
             .attrs[0].sem_name="POSITION",
             .vs.source = display_vs_src,
             .fs = {
-                .images[0].type = SG_IMAGETYPE_2D,
+                .images[0] = { .name = "tex", .type = SG_IMAGETYPE_2D },
                 .source = display_fs_src
             }
         }),

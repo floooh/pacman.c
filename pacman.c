@@ -11,7 +11,7 @@
 #include <stdlib.h> // abs()
 
 #define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
-#define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
+#define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
 
 // various constants
@@ -142,6 +142,13 @@ typedef enum {
     GHOSTSTATE_ENTERHOUSE
 } ghoststate_t;
 
+// reasons why game loop is frozen
+typedef enum {
+    FREEZETYPE_PRELUDE   = (1<<0),  // game-loop prelude is active (PLAYER ONE READY!)
+    FREEZETYPE_EAT_GHOST = (1<<1),  // Pacman has eaten a ghost
+    FREEZETYPE_DEAD      = (1<<2),  // Pacman was eaten by ghost
+} freezetype_t;
+
 // a timer holds a specific game-tick when an action should be started
 typedef struct {
     uint32_t tick;
@@ -226,7 +233,7 @@ static struct {
         timer_t pill_eaten;         // last time Pacman ate a pill
         timer_t ghost_eaten;        // last time Pacman ate a ghost
         timer_t force_leave_house;  // starts when a dot is eaten
-        bool frozen;                // if true the game is currently 'frozen'
+        uint8_t freeze;             // combination of FREEZETYPE_* flags
         uint32_t score;             // score / 10
         uint32_t hiscore;           // hiscore / 10
         uint8_t num_lives;
@@ -1029,7 +1036,7 @@ static void hiscore_tick(void) {
 // one-time init at start of game state
 static void game_init(void) {
     input_enable();
-    state.game.frozen = true;
+    state.game.freeze = FREEZETYPE_PRELUDE;
     state.game.num_lives = NUM_LIVES;
     state.game.score = 0;
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
@@ -1192,7 +1199,7 @@ static void game_update_tiles(void) {
     // update the energizer pill colors (blinking/non-blinking)
     static const int2_t pill_pos[NUM_PILLS] = { { 1, 6 }, { 26, 6 }, { 1, 26 }, { 26, 26 } };
     for (int i = 0; i < NUM_PILLS; i++) {
-        if (state.game.frozen) {
+        if (state.game.freeze) {
             vid_color(pill_pos[i], COLOR_DOT);
         }
         else {
@@ -1231,15 +1238,13 @@ static void game_update_sprites(void) {
         if (spr->enabled) {
             const actor_t* actor = &state.game.pacman.actor;
             spr->pos = actor_to_sprite_pos(actor->pos);
-            if (state.game.frozen) {
-                if (state.game.num_ghosts_eaten != 0) {
-                    // hide Pacman shortly after he's eaten a ghost (via an invisible Sprite tile)
-                    spr->tile = 30;
-                }
-                else {
-                    // special case game frozen at start of round, fully round Pacman
-                    spr->tile = 48;
-                }
+            if (state.game.freeze & FREEZETYPE_EAT_GHOST) {
+                // hide Pacman shortly after he's eaten a ghost (via an invisible Sprite tile)
+                spr->tile = 30;
+            }
+            else if (state.game.freeze & FREEZETYPE_PRELUDE) {
+                // special case game frozen at start of round, show Pacman with 'closed mouth'
+                spr->tile = 48;
             }
             else {
                 spr_anim_pacman(actor->dir, actor->anim_tick);
@@ -1676,8 +1681,9 @@ static void game_update_actors(void) {
                     start(&ghost->eaten);
                     start(&state.game.ghost_eaten);
                     state.game.num_ghosts_eaten++;
+                    // increase score by 20, 40, 80, 160
                     state.game.score += 10 * (1<<state.game.num_ghosts_eaten);
-                    state.game.frozen = true;
+                    state.game.freeze |= FREEZETYPE_EAT_GHOST;
                 }
                 else if ((ghost->state == GHOSTSTATE_CHASE) || (ghost->state == GHOSTSTATE_SCATTER)) {
                     // FIXME: Pacman dies
@@ -1738,19 +1744,19 @@ static void game_tick(void) {
         start(&state.game.round_started);
     }
     if (now(state.game.round_started)) {
-        state.game.frozen = false;
+        state.game.freeze &= ~FREEZETYPE_PRELUDE;
         // clear the 'READY!' message
         vid_color_text(i2(11,20), 0x10, "      ");
     }
 
     // if game is frozen because Pacman ate a ghost, unfreeze after a while
-    if (state.game.frozen) {
+    if (state.game.freeze & FREEZETYPE_EAT_GHOST) {
         if (after(state.game.ghost_eaten, GHOST_EATEN_FREEZE_TICKS)) {
-            state.game.frozen = false;
+            state.game.freeze &= ~FREEZETYPE_EAT_GHOST;
         }
     }
 
-    if (!state.game.frozen) {
+    if (!state.game.freeze) {
         game_update_actors();
     }
     game_update_tiles();

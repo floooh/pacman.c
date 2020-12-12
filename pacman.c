@@ -10,10 +10,10 @@
 #include <string.h> // memset()
 #include <stdlib.h> // abs()
 
-#define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
-#define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
+#define DBG_SKIP_INTRO      (0)     // set to (1) to skip intro
+#define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
-#define DBG_ESCAPE          (1)     // set to (1) to leave game loop with Esc
+#define DBG_ESCAPE          (0)     // set to (1) to leave game loop with Esc
 #define DBG_DOUBLE_SPEED    (0)     // set to (1) to speed up game (useful with godmode)
 #define DBG_GODMODE         (0)     // set to (1) to disable dying
 
@@ -257,7 +257,7 @@ static struct {
         uint8_t freeze;             // combination of FREEZETYPE_* flags
         uint32_t score;             // score / 10
         uint32_t hiscore;           // hiscore / 10
-        uint8_t num_lives;
+        int8_t num_lives;
         uint8_t num_ghosts_eaten;   // number of ghosts easten with current pill
         uint8_t num_dots_eaten;     // if == NUM_DOTS, Pacman wins the round
         bool global_dot_counter_active;     // set to true when Pacman loses a life
@@ -402,12 +402,12 @@ static void frame(void) {
 
     // run the game at a fixed tick rate regardless of frame rate
     uint32_t frame_time_us = (uint32_t) stm_us(stm_laptime(&state.timing.laptime_store));
-    // clamp max frame time (useful when in debugger)
+    // clamp max frame time (so the timing isn't messed up when stopping in the debugger)
     if (frame_time_us > 33333) {
         frame_time_us = 33333;
     }
     state.timing.tick_accum += frame_time_us;
-    while (state.timing.tick_accum >= TICK_DURATION) {
+    while (state.timing.tick_accum > 0) {
         state.timing.tick_accum -= TICK_DURATION;
         state.timing.tick++;
 
@@ -1065,9 +1065,21 @@ static void game_init_playfield(void) {
     vid_color(i2(14,15), 0x18);
 }
 
+// disable all game loop timers
+static void game_disable_timers(void) {
+    disable(&state.game.round_won);
+    disable(&state.game.game_over);
+    disable(&state.game.dot_eaten);
+    disable(&state.game.pill_eaten);
+    disable(&state.game.ghost_eaten);
+    disable(&state.game.pacman_eaten);
+    disable(&state.game.force_leave_house);
+}
+
 // one-time init at start of game state
 static void game_init(void) {
     input_enable();
+    game_disable_timers();
     state.game.freeze = FREEZETYPE_PRELUDE;
     state.game.num_lives = NUM_LIVES;
     state.game.global_dot_counter_active = false;
@@ -1098,26 +1110,23 @@ static void game_round_init(void) {
         game_init_playfield();
         state.game.global_dot_counter_active = false;
     }
-    else if (state.game.num_lives != NUM_LIVES) {
-        /* otherwise check if a new round was started because Pacman lost a life,
-            in that case, use the global dot counter instead of the per-ghost
-            dot counters to define when ghosts should leave the ghost house
+    else {
+        /* if the previous round was lost, use the global dot counter
+           to detect when ghosts should leave the ghost house instead
+           of the per-ghost dot counter
         */
-        state.game.global_dot_counter_active = true;
-        state.game.global_dot_counter = 0;
+        if (state.game.num_lives != NUM_LIVES) {
+            state.game.global_dot_counter_active = true;
+            state.game.global_dot_counter = 0;
+        }
+        state.game.num_lives--;
     }
-    state.game.num_lives--;
+    assert(state.game.num_lives >= 0);
 
     state.game.freeze = FREEZETYPE_READY;
     state.game.xorshift = 0x12345678;
     state.game.num_ghosts_eaten = 0;
-    disable(&state.game.round_won);
-    disable(&state.game.game_over);
-    disable(&state.game.dot_eaten);
-    disable(&state.game.pill_eaten);
-    disable(&state.game.ghost_eaten);
-    disable(&state.game.pacman_eaten);
-    disable(&state.game.force_leave_house);
+    game_disable_timers();
 
     vid_color_text(i2(11, 20), 0x9, "READY!");
 

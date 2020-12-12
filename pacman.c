@@ -96,11 +96,10 @@ enum {
     COLOR_WHITE_BORDER  = 0x1F
 };
 
-// the top-level game states (intro => game => hiscore)
+// the top-level game states (intro => game => intro)
 typedef enum {
     GAMESTATE_INTRO,
     GAMESTATE_GAME,
-    GAMESTATE_HISCORE,
 } gamestate_t;
 
 // directions NOTE: bit0==0: horizontal movement, bit0==1: vertical movement
@@ -227,7 +226,7 @@ typedef struct {
 // all state is in a single nested struct
 static struct {
 
-    gamestate_t gamestate;  // the current gamestate (intro => game => hiscore)
+    gamestate_t gamestate;  // the current gamestate (intro => game => intro)
 
     struct {
         uint32_t tick;          // the central game tick, this drives the whole game
@@ -240,11 +239,6 @@ static struct {
         timer_t started;
         timer_t chase;
     } intro;
-
-    // hiscore state
-    struct {
-        timer_t started;
-    } hiscore;
 
     // game state
     struct {
@@ -361,7 +355,6 @@ static bool now(timer_t t);
 static void pacman_tick(void);
 static void intro_tick(void);
 static void game_tick(void);
-static void hiscore_tick(void);
 
 static void input_enable(void);
 static void input_disable(void);
@@ -425,9 +418,6 @@ static void frame(void) {
         if (now(state.game.started)) {
             state.gamestate = GAMESTATE_GAME;
         }
-        if (now(state.hiscore.started)) {
-            state.gamestate = GAMESTATE_HISCORE;
-        }
 
         // call the top-level game state update function
         switch (state.gamestate) {
@@ -436,9 +426,6 @@ static void frame(void) {
                 break;
             case GAMESTATE_GAME:
                 game_tick();
-                break;
-            case GAMESTATE_HISCORE:
-                hiscore_tick();
                 break;
         }
     }
@@ -1834,14 +1821,14 @@ static void game_tick(void) {
         vid_color_text(i2(9,20), 0x01, "GAME  OVER");
         input_disable();
         start_after(&state.gfx.fadeout, GAMEOVER_TICKS);
-        start_after(&state.hiscore.started, GAMEOVER_TICKS+FADE_TICKS);
+        start_after(&state.intro.started, GAMEOVER_TICKS+FADE_TICKS);
     }
 
     #if DBG_ESCAPE
         if (state.input.esc) {
             input_disable();
             start(&state.gfx.fadeout);
-            start_after(&state.hiscore.started, FADE_TICKS);
+            start_after(&state.intro.started, FADE_TICKS);
         }
     #endif
 
@@ -1939,22 +1926,6 @@ static void intro_tick(void) {
         input_disable();
         start(&state.gfx.fadeout);
         start_after(&state.game.started, FADE_TICKS);
-    }
-}
-
-/*== HISCORE GAMESTATE CODE ==================================================*/
-static void hiscore_tick(void) {
-    if (now(state.hiscore.started)) {
-        start(&state.gfx.fadein);
-        spr_clear();
-        input_enable();
-        vid_clear(TILE_SPACE, COLOR_DEFAULT);
-        vid_text(i2(7,16), "HISCORE TODO!");
-    }
-    if (state.input.anykey) {
-        input_disable();
-        start(&state.gfx.fadeout);
-        start_after(&state.intro.started, FADE_TICKS);
     }
 }
 

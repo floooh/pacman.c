@@ -408,7 +408,12 @@ static void init(void) {
 static void frame(void) {
 
     // run the game at a fixed tick rate regardless of frame rate
-    state.timing.tick_accum += stm_us(stm_laptime(&state.timing.laptime_store));
+    uint32_t frame_time_us = (uint32_t) stm_us(stm_laptime(&state.timing.laptime_store));
+    // clamp max frame time (useful when in debugger)
+    if (frame_time_us > 33333) {
+        frame_time_us = 33333;
+    }
+    state.timing.tick_accum += frame_time_us;
     while (state.timing.tick_accum >= TICK_DURATION) {
         state.timing.tick_accum -= TICK_DURATION;
         state.timing.tick++;
@@ -1080,6 +1085,7 @@ static void game_init(void) {
     state.game.num_lives = NUM_LIVES;
     state.game.global_dot_counter_active = false;
     state.game.global_dot_counter = 0;
+    state.game.num_dots_eaten = 0;
     state.game.score = 0;
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
         state.game.fruit[i] = (i==0) ? FRUITTYPE_CHERRIES:FRUITTYPE_NONE;
@@ -1248,10 +1254,9 @@ static void game_update_tiles(void) {
         vid_draw_tile_quad(i2(24-2*i,34), color_code, tile_code);
     }
 
-    // if game was won, render the entire playfield as blinking blue/white
+    // if game round was won, render the entire playfield as blinking blue/white
     if (after(state.game.round_won, 1*60)) {
         if (since(state.game.round_won) & 0x10) {
-            // white border tiles
             vid_color_playfield(COLOR_DOT);
         }
         else {
@@ -1470,8 +1475,7 @@ static void game_update_ghost_state(ghost_t* ghost) {
                 ghost->next_dir = ghost->actor.dir = DIR_LEFT;
                 break;
             case GHOSTSTATE_ENTERHOUSE:
-                // a ghost that was eaten is immune to frightened
-                // until Pacman eats enother pill
+                // a ghost that was eaten is immune to frighten until Pacman eats enother pill
                 disable(&ghost->frightened);
                 break;
             case GHOSTSTATE_FRIGHTENED:

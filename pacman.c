@@ -10,10 +10,11 @@
 #include <string.h> // memset()
 #include <stdlib.h> // abs()
 
-#define DBG_SKIP_INTRO      (0)     // set to (1) to skip intro
-#define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
+#define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
+#define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
 #define DBG_ESCAPE          (1)     // set to (1) to leave game loop with Esc
+#define DBG_DOUBLE_SPEED    (0)     // set to (1) to speed up game (useful with godmode)
 #define DBG_GODMODE         (0)     // set to (1) to disable dying
 
 // various constants
@@ -43,6 +44,7 @@ enum {
     PACMAN_EATEN_TICKS  = 60,       // number of ticks to freeze game when Pacman is eaten
     PACMAN_DEATH_TICKS  = 150,      // number of ticks to show the Pacman sequence before starting new round
     GAMEOVER_TICKS      = 3*60,     // number of ticks the game over message is shown
+    ROUNDWON_TICKS      = 4*60,     // number of ticks to wait after a round was won
 };
 
 // common tile codes
@@ -85,6 +87,7 @@ enum {
     COLOR_GRAPES        = 0x17,
     COLOR_GALAXIAN      = 0x09,
     COLOR_KEY           = 0x16,
+    COLOR_WHITE_BORDER  = 0x1F
 };
 
 // the top-level game states (intro => game => hiscore)
@@ -154,6 +157,7 @@ typedef enum {
     FREEZETYPE_READY     = (1<<1),  // READY! phase is active
     FREEZETYPE_EAT_GHOST = (1<<2),  // Pacman has eaten a ghost
     FREEZETYPE_DEAD      = (1<<3),  // Pacman was eaten by ghost
+    FREEZETYPE_WON       = (1<<4),  // game round was won
 } freezetype_t;
 
 // a timer holds a specific game-tick when an action should be started
@@ -183,7 +187,8 @@ typedef struct {
     ghoststate_t state;
     timer_t frightened;
     timer_t eaten;
-    uint8_t dot_counter;    // the ghost's personal dot counter for the ghost-house-logic
+    uint16_t dot_counter;
+    uint16_t dot_limit;
 } ghost_t;
 
 // pacman state
@@ -237,7 +242,8 @@ static struct {
         timer_t prelude_started;
         timer_t ready_started;
         timer_t round_started;
-        timer_t gameover;
+        timer_t round_won;
+        timer_t game_over;
         timer_t dot_eaten;          // last time Pacman ate a dot
         timer_t pill_eaten;         // last time Pacman ate a pill
         timer_t ghost_eaten;        // last time Pacman ate a ghost
@@ -248,8 +254,9 @@ static struct {
         uint32_t hiscore;           // hiscore / 10
         uint8_t num_lives;
         uint8_t num_ghosts_eaten;   // number of ghosts easten with current pill
-        bool dot_counter_active;    // set to true when Pacman loses a life
-        uint8_t dot_counter;        // the global dot counter for the ghost-house-logic
+        uint8_t num_dots_eaten;     // if == NUM_DOTS, Pacman wins the round
+        bool global_dot_counter_active;     // set to true when Pacman loses a life
+        uint8_t global_dot_counter;         // the global dot counter for the ghost-house-logic
         ghost_t ghost[NUM_GHOSTS];
         pacman_t pacman;
         fruit_t fruit[NUM_STATUS_FRUITS];
@@ -411,6 +418,9 @@ static void frame(void) {
             break;
         case GAMESTATE_GAME:
             game_tick();
+            #if DBG_DOUBLE_SPEED
+                game_tick();
+            #endif
             break;
         case GAMESTATE_HISCORE:
             hiscore_tick();
@@ -621,6 +631,15 @@ int2_t dist_to_tile_mid(int2_t pos) {
 static void vid_clear(uint8_t tile_code, uint8_t color_code) {
     memset(&state.gfx.video_ram, tile_code, sizeof(state.gfx.video_ram));
     memset(&state.gfx.color_ram, color_code, sizeof(state.gfx.color_ram));
+}
+
+// clear the playfield's tile color
+static void vid_color_playfield(uint8_t color_code) {
+    for (int y = 3; y < DISPLAY_TILES_Y-2; y++) {
+        for (int x = 0; x < DISPLAY_TILES_X; x++) {
+            state.gfx.color_ram[y][x] = color_code;
+        }
+    }
 }
 
 // check if a tile position is valid
@@ -987,92 +1006,120 @@ static void dbg_marker(int index, int2_t tile_pos, uint8_t tile_code, uint8_t co
 
 /*== GAMEPLAY CODE ===========================================================*/
 
+// initialize the playfield tiles
+static void game_init_playfield(void) {
+    vid_color_playfield(COLOR_DOT);
+    // decode the playfield from an ASCII map into tiles codes
+    static const char* tiles =
+       //0123456789012345678901234567
+        "0UUUUUUUUUUUU45UUUUUUUUUUUU1" // 3
+        "L............rl............R" // 4
+        "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 5
+        "LPr  l.r   l.rl.r   l.r  lPR" // 6
+        "L.guuh.guuuh.gh.guuuh.guuh.R" // 7
+        "L..........................R" // 8
+        "L.ebbf.ef.ebbbbbbf.ef.ebbf.R" // 9
+        "L.guuh.rl.guuyxuuh.rl.guuh.R" // 10
+        "L......rl....rl....rl......R" // 11
+        "2BBBBf.rzbbf rl ebbwl.eBBBB3" // 12
+        "     L.rxuuh gh guuyl.R     " // 13
+        "     L.rl          rl.R     " // 14
+        "     L.rl mjs--tjn rl.R     " // 15
+        "UUUUUh.gh i      q gh.gUUUUU" // 16
+        "      .   i      q   .      " // 17
+        "BBBBBf.ef i      q ef.eBBBBB" // 18
+        "     L.rl okkkkkkp rl.R     " // 19
+        "     L.rl          rl.R     " // 20
+        "     L.rl ebbbbbbf rl.R     " // 21
+        "0UUUUh.gh guuyxuuh gh.gUUUU1" // 22
+        "L............rl............R" // 23
+        "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 24
+        "L.guyl.guuuh.gh.guuuh.rxuh.R" // 25
+        "LP..rl.......  .......rl..PR" // 26
+        "6bf.rl.ef.ebbbbbbf.ef.rl.eb8" // 27
+        "7uh.gh.rl.guuyxuuh.rl.gh.gu9" // 28
+        "L......rl....rl....rl......R" // 29
+        "L.ebbbbwzbbf.rl.ebbwzbbbbf.R" // 30
+        "L.guuuuuuuuh.gh.guuuuuuuuh.R" // 31
+        "L..........................R" // 32
+        "2BBBBBBBBBBBBBBBBBBBBBBBBBB3"; // 33
+       //0123456789012345678901234567
+    uint8_t t[128];
+    for (int i = 0; i < 128; i++) { t[i]=TILE_DOT; }
+    t[' ']=0x40; t['0']=0xD1; t['1']=0xD0; t['2']=0xD5; t['3']=0xD4; t['4']=0xFB;
+    t['5']=0xFA; t['6']=0xD7; t['7']=0xD9; t['8']=0xD6; t['9']=0xD8; t['U']=0xDB;
+    t['L']=0xD3; t['R']=0xD2; t['B']=0xDC; t['b']=0xDF; t['e']=0xE7; t['f']=0xE6;
+    t['g']=0xEB; t['h']=0xEA; t['l']=0xE8; t['r']=0xE9; t['u']=0xE5; t['w']=0xF5;
+    t['x']=0xF2; t['y']=0xF3; t['z']=0xF4; t['m']=0xED; t['n']=0xEC; t['o']=0xEF;
+    t['p']=0xEE; t['j']=0xDD; t['i']=0xD2; t['k']=0xDB; t['q']=0xD3; t['s']=0xF1;
+    t['t']=0xF0; t['-']=TILE_DOOR; t['P']=TILE_PILL;
+    for (int y = 3, i = 0; y <= 33; y++) {
+        for (int x = 0; x < 28; x++, i++) {
+            state.gfx.video_ram[y][x] = t[tiles[i] & 127];
+        }
+    }
+    // ghost house gate colors
+    vid_color(i2(13,15), 0x18);
+    vid_color(i2(14,15), 0x18);
+}
+
 // one-time init at start of game state
 static void game_init(void) {
     input_enable();
     state.game.freeze = FREEZETYPE_PRELUDE;
     state.game.num_lives = NUM_LIVES;
+    state.game.global_dot_counter_active = false;
+    state.game.global_dot_counter = 0;
     state.game.score = 0;
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
         state.game.fruit[i] = (i==0) ? FRUITTYPE_CHERRIES:FRUITTYPE_NONE;
     }
 
-    // draw the playfield
-    {
-        vid_clear(TILE_SPACE, COLOR_DOT);
-        vid_color_text(i2(9,0), COLOR_DEFAULT, "HIGH SCORE");
-
-        // decode the playfield from an ASCII map into tiles codes
-        static const char* tiles =
-           //0123456789012345678901234567
-            "0UUUUUUUUUUUU45UUUUUUUUUUUU1" // 3
-            "L............rl............R" // 4
-            "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 5
-            "LPr  l.r   l.rl.r   l.r  lPR" // 6
-            "L.guuh.guuuh.gh.guuuh.guuh.R" // 7
-            "L..........................R" // 8
-            "L.ebbf.ef.ebbbbbbf.ef.ebbf.R" // 9
-            "L.guuh.rl.guuyxuuh.rl.guuh.R" // 10
-            "L......rl....rl....rl......R" // 11
-            "2BBBBf.rzbbf rl ebbwl.eBBBB3" // 12
-            "     L.rxuuh gh guuyl.R     " // 13
-            "     L.rl          rl.R     " // 14
-            "     L.rl mjs--tjn rl.R     " // 15
-            "UUUUUh.gh i      q gh.gUUUUU" // 16
-            "      .   i      q   .      " // 17
-            "BBBBBf.ef i      q ef.eBBBBB" // 18
-            "     L.rl okkkkkkp rl.R     " // 19
-            "     L.rl          rl.R     " // 20
-            "     L.rl ebbbbbbf rl.R     " // 21
-            "0UUUUh.gh guuyxuuh gh.gUUUU1" // 22
-            "L............rl............R" // 23
-            "L.ebbf.ebbbf.rl.ebbbf.ebbf.R" // 24
-            "L.guyl.guuuh.gh.guuuh.rxuh.R" // 25
-            "LP..rl.......  .......rl..PR" // 26
-            "6bf.rl.ef.ebbbbbbf.ef.rl.eb8" // 27
-            "7uh.gh.rl.guuyxuuh.rl.gh.gu9" // 28
-            "L......rl....rl....rl......R" // 29
-            "L.ebbbbwzbbf.rl.ebbwzbbbbf.R" // 30
-            "L.guuuuuuuuh.gh.guuuuuuuuh.R" // 31
-            "L..........................R" // 32
-            "2BBBBBBBBBBBBBBBBBBBBBBBBBB3"; // 33
-           //0123456789012345678901234567
-        uint8_t t[128];
-        for (int i = 0; i < 128; i++) { t[i]=TILE_DOT; }
-        t[' ']=0x40; t['0']=0xD1; t['1']=0xD0; t['2']=0xD5; t['3']=0xD4; t['4']=0xFB;
-        t['5']=0xFA; t['6']=0xD7; t['7']=0xD9; t['8']=0xD6; t['9']=0xD8; t['U']=0xDB;
-        t['L']=0xD3; t['R']=0xD2; t['B']=0xDC; t['b']=0xDF; t['e']=0xE7; t['f']=0xE6;
-        t['g']=0xEB; t['h']=0xEA; t['l']=0xE8; t['r']=0xE9; t['u']=0xE5; t['w']=0xF5;
-        t['x']=0xF2; t['y']=0xF3; t['z']=0xF4; t['m']=0xED; t['n']=0xEC; t['o']=0xEF;
-        t['p']=0xEE; t['j']=0xDD; t['i']=0xD2; t['k']=0xDB; t['q']=0xD3; t['s']=0xF1;
-        t['t']=0xF0; t['-']=TILE_DOOR; t['P']=TILE_PILL;
-        for (int y = 3, i = 0; y <= 33; y++) {
-            for (int x = 0; x < 28; x++, i++) {
-                state.gfx.video_ram[y][x] = t[tiles[i] & 127];
-            }
-        }
-        // patch colors
-        vid_color(i2(13,15), 0x18); vid_color(i2(14,15), 0x18); // ghost house gate
-        // PLAYER ONE READY!
-        vid_color_text(i2(9,14), 0x5, "PLAYER ONE");
-        vid_color_text(i2(11, 20), 0x9, "READY!");
-    }
+    // draw the playfield and PLAYER ONE READY! message
+    vid_clear(TILE_SPACE, COLOR_DOT);
+    vid_color_text(i2(9,0), COLOR_DEFAULT, "HIGH SCORE");
+    game_init_playfield();
+    vid_color_text(i2(9,14), 0x5, "PLAYER ONE");
+    vid_color_text(i2(11, 20), 0x9, "READY!");
 }
 
 // setup state at start of a game round
 static void game_round_init(void) {
     spr_clear();
+
+    /* if a new round was started because Pacman has "won" (eaten all dots),
+        redraw the playfield and reset the global dot counter
+    */
+    if (state.game.num_dots_eaten == NUM_DOTS) {
+        state.game.num_dots_eaten = 0;
+        game_init_playfield();
+        state.game.global_dot_counter_active = false;
+    }
+    else if (state.game.num_lives != NUM_LIVES) {
+        /* otherwise check if a new round was started because Pacman lost a life,
+            in that case, use the global dot counter instead of the per-ghost
+            dot counters to define when ghosts should leave the ghost house
+        */
+        state.game.global_dot_counter_active = true;
+        state.game.global_dot_counter = 0;
+    }
+    state.game.num_lives--;
+
     state.game.freeze = FREEZETYPE_READY;
     state.game.xorshift = 0x12345678;
-    state.game.dot_counter_active = false;
-    state.game.dot_counter = 0;
     state.game.num_ghosts_eaten = 0;
+    disable(&state.game.round_won);
+    disable(&state.game.game_over);
     disable(&state.game.dot_eaten);
     disable(&state.game.pill_eaten);
     disable(&state.game.ghost_eaten);
     disable(&state.game.pacman_eaten);
     disable(&state.game.force_leave_house);
+
     vid_color_text(i2(11, 20), 0x9, "READY!");
+
+    // the force-house timer forces ghosts out of the house if Pacman isn't eating dots
+    start(&state.game.force_leave_house);
 
     // Pacman starts running to the left
     state.game.pacman = (pacman_t) {
@@ -1094,7 +1141,8 @@ static void game_round_init(void) {
         .state = GHOSTSTATE_SCATTER,
         .frightened = disabled_timer(),
         .eaten = disabled_timer(),
-        .dot_counter = 0
+        .dot_counter = 0,
+        .dot_limit = 0
     };
     state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = false, .color = COLOR_BLINKY };
 
@@ -1110,6 +1158,7 @@ static void game_round_init(void) {
         .frightened = disabled_timer(),
         .eaten = disabled_timer(),
         .dot_counter = 0,
+        .dot_limit = 0
     };
     state.gfx.sprite[SPRITE_PINKY] = (sprite_t) { .enabled = false, .color = COLOR_PINKY };
 
@@ -1124,8 +1173,9 @@ static void game_round_init(void) {
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
         .eaten = disabled_timer(),
+        .dot_counter = 0,
         // FIXME: needs to be adjusted by current round!
-        .dot_counter = 30,
+        .dot_limit = 30
     };
     state.gfx.sprite[SPRITE_INKY] = (sprite_t) { .enabled = false, .color = COLOR_INKY };
 
@@ -1140,8 +1190,9 @@ static void game_round_init(void) {
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
         .eaten = disabled_timer(),
+        .dot_counter = 0,
         // FIXME: needs to be adjusted by current round!
-        .dot_counter = 60,
+        .dot_limit = 60,
     };
     state.gfx.sprite[SPRITE_CLYDE] = (sprite_t) { .enabled = false, .color = COLOR_CLYDE };
 }
@@ -1186,6 +1237,17 @@ static void game_update_tiles(void) {
         uint8_t color_code = fruit_tiles_colors[state.game.fruit[i]][1];
         vid_draw_tile_quad(i2(24-2*i,34), color_code, tile_code);
     }
+
+    // if game was won, render the entire playfield as blinking blue/white
+    if (after(state.game.round_won, 1*60)) {
+        if (since(state.game.round_won) & 0x10) {
+            // white border tiles
+            vid_color_playfield(COLOR_DOT);
+        }
+        else {
+            vid_color_playfield(COLOR_WHITE_BORDER);
+        }
+    }
 }
 
 static void game_update_sprites(void) {
@@ -1225,6 +1287,10 @@ static void game_update_sprites(void) {
                 if (after(state.game.pacman_eaten, PACMAN_EATEN_TICKS)) {
                     sprite->tile = 30;  // invisible sprite tile
                 }
+            }
+            // if Pacman has won the round, hide ghosts
+            else if (state.game.freeze & FREEZETYPE_WON) {
+                sprite->tile = 30;
             }
             else switch (ghost->state) {
                 case GHOSTSTATE_EYES:
@@ -1346,22 +1412,22 @@ static void game_update_ghost_state(ghost_t* ghost) {
                 new_state = GHOSTSTATE_LEAVEHOUSE;
                 start(&state.game.force_leave_house);
             }
-            else if (state.game.dot_counter_active) {
+            else if (state.game.global_dot_counter_active) {
                 // if Pacman has lost a live this round, the global dot counter is used
-                if ((ghost->type == GHOSTTYPE_PINKY) && (state.game.dot_counter == 7)) {
+                if ((ghost->type == GHOSTTYPE_PINKY) && (state.game.global_dot_counter == 7)) {
                     new_state = GHOSTSTATE_LEAVEHOUSE;
                 }
-                else if ((ghost->type == GHOSTTYPE_INKY) && (state.game.dot_counter == 17)) {
+                else if ((ghost->type == GHOSTTYPE_INKY) && (state.game.global_dot_counter == 17)) {
                     new_state = GHOSTSTATE_LEAVEHOUSE;
                 }
-                else if ((ghost->type == GHOSTTYPE_CLYDE) && (state.game.dot_counter == 32)) {
+                else if ((ghost->type == GHOSTTYPE_CLYDE) && (state.game.global_dot_counter == 32)) {
                     new_state = GHOSTSTATE_LEAVEHOUSE;
                     // NOTE that global dot counter is deactivated if (and only if) Clyde
                     // is in the house and the dot counter reaches 32
-                    state.game.dot_counter_active = false;
+                    state.game.global_dot_counter_active = false;
                 }
             }
-            else if (ghost->dot_counter == 0) {
+            else if (ghost->dot_counter == ghost->dot_limit) {
                 // in the normal case, check the ghost's personal dot counter
                 new_state = GHOSTSTATE_LEAVEHOUSE;
             }
@@ -1590,13 +1656,13 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
 static void game_update_dot_counters(void) {
     // if a life was lost round, use the global dot counter (this will)
     // be deactivated again after all ghosts left the house
-    if (state.game.dot_counter_active) {
-        state.game.dot_counter++;
+    if (state.game.global_dot_counter_active) {
+        state.game.global_dot_counter++;
     }
     else {
         for (int i = 0; i < NUM_GHOSTS; i++) {
-            if (state.game.ghost[i].dot_counter > 0) {
-                state.game.ghost[i].dot_counter--;
+            if (state.game.ghost[i].dot_counter < state.game.ghost[i].dot_limit) {
+                state.game.ghost[i].dot_counter++;
                 break;
             }
         }
@@ -1624,6 +1690,9 @@ static void game_update_actors(void) {
         if (is_dot(tile_pos)) {
             vid_tile(tile_pos, TILE_SPACE);
             state.game.score += 1;
+            if (++state.game.num_dots_eaten == NUM_DOTS) {
+                start(&state.game.round_won);
+            }
             start(&state.game.dot_eaten);
             start(&state.game.force_leave_house);
             game_update_dot_counters();
@@ -1631,6 +1700,9 @@ static void game_update_actors(void) {
         if (is_pill(tile_pos)) {
             vid_tile(tile_pos, TILE_SPACE);
             state.game.score += 5;
+            if (++state.game.num_dots_eaten == NUM_DOTS) {
+                start(&state.game.round_won);
+            }
             state.game.num_ghosts_eaten = 0;
             start(&state.game.pill_eaten);
             for (int i = 0; i < NUM_GHOSTS; i++) {
@@ -1661,7 +1733,7 @@ static void game_update_actors(void) {
                         start_after(&state.game.ready_started, PACMAN_EATEN_TICKS+PACMAN_DEATH_TICKS);
                     }
                     else {
-                        start_after(&state.game.gameover, PACMAN_EATEN_TICKS+PACMAN_DEATH_TICKS);
+                        start_after(&state.game.game_over, PACMAN_EATEN_TICKS+PACMAN_DEATH_TICKS);
                     }
                     #endif
                 }
@@ -1711,8 +1783,6 @@ static void game_tick(void) {
         for (int i = 0; i < NUM_GHOSTS; i++) {
             spr_ghost(i)->enabled = true;
         }
-        assert(state.game.num_lives > 0);
-        state.game.num_lives--;
         // after 2 seconds start the interactive game loop
         start_after(&state.game.round_started, 2*60);
     }
@@ -1740,7 +1810,12 @@ static void game_tick(void) {
         state.game.hiscore = state.game.score;
     }
 
-    if (now(state.game.gameover)) {
+    // check for end-round condition
+    if (now(state.game.round_won)) {
+        state.game.freeze |= FREEZETYPE_WON;
+        start_after(&state.game.ready_started, ROUNDWON_TICKS);
+    }
+    if (now(state.game.game_over)) {
         // display game over string
         vid_color_text(i2(9,20), 0x01, "GAME  OVER");
         input_disable();
@@ -1749,30 +1824,30 @@ static void game_tick(void) {
     }
 
     #if DBG_ESCAPE
-    if (state.input.esc) {
-        input_disable();
-        start(&state.gfx.fadeout);
-        start_after(&state.hiscore.started, FADE_TICKS);
-    }
+        if (state.input.esc) {
+            input_disable();
+            start(&state.gfx.fadeout);
+            start_after(&state.hiscore.started, FADE_TICKS);
+        }
     #endif
 
     #if DBG_MARKERS
-    // visualize current ghost targets
-    for (int i = 0; i < NUM_GHOSTS; i++) {
-        const ghost_t* ghost = &state.game.ghost[i];
-        uint8_t tile = 'X';
-        switch (ghost->state) {
-            case GHOSTSTATE_NONE:       tile = 'N'; break;
-            case GHOSTSTATE_CHASE:      tile = 'C'; break;
-            case GHOSTSTATE_SCATTER:    tile = 'S'; break;
-            case GHOSTSTATE_FRIGHTENED: tile = 'F'; break;
-            case GHOSTSTATE_EYES:       tile = 'E'; break;
-            case GHOSTSTATE_HOUSE:      tile = 'H'; break;
-            case GHOSTSTATE_LEAVEHOUSE: tile = 'L'; break;
-            case GHOSTSTATE_ENTERHOUSE: tile = 'E'; break;
+        // visualize current ghost targets
+        for (int i = 0; i < NUM_GHOSTS; i++) {
+            const ghost_t* ghost = &state.game.ghost[i];
+            uint8_t tile = 'X';
+            switch (ghost->state) {
+                case GHOSTSTATE_NONE:       tile = 'N'; break;
+                case GHOSTSTATE_CHASE:      tile = 'C'; break;
+                case GHOSTSTATE_SCATTER:    tile = 'S'; break;
+                case GHOSTSTATE_FRIGHTENED: tile = 'F'; break;
+                case GHOSTSTATE_EYES:       tile = 'E'; break;
+                case GHOSTSTATE_HOUSE:      tile = 'H'; break;
+                case GHOSTSTATE_LEAVEHOUSE: tile = 'L'; break;
+                case GHOSTSTATE_ENTERHOUSE: tile = 'E'; break;
+            }
+            dbg_marker(i, state.game.ghost[i].target_pos, tile, COLOR_BLINKY+2*i);
         }
-        dbg_marker(i, state.game.ghost[i].target_pos, tile, COLOR_BLINKY+2*i);
-    }
     #endif
 }
 

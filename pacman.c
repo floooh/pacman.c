@@ -10,9 +10,10 @@
 #include <string.h> // memset()
 #include <stdlib.h> // abs()
 
-#define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
-#define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
+#define DBG_SKIP_INTRO      (0)     // set to (1) to skip intro
+#define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
+#define DBG_ESCAPE          (1)     // set to (1) to leave game loop with Esc
 #define DBG_GODMODE         (0)     // set to (1) to disable dying
 
 // various constants
@@ -38,9 +39,10 @@ enum {
     NUM_PILLS           = 4,    // number of energizer pills on playfield
     ANTEPORTAS_X        = 14*TILE_WIDTH,  // pixel position of the house enter/leave point
     ANTEPORTAS_Y        = 14*TILE_HEIGHT + TILE_HEIGHT/2,
-    GHOST_EATEN_FREEZE_TICKS = 60,      // number of ticks the game freezes after Pacman eats a ghost
-    PACMAN_EATEN_TICKS  = 90, // number of ticks to freeze game when Pacman is eaten
-    PACMAN_DEATH_TICKS  = 2*60, // number of ticks to show the Pacman sequence before starting new round
+    GHOST_EATEN_FREEZE_TICKS = 60,  // number of ticks the game freezes after Pacman eats a ghost
+    PACMAN_EATEN_TICKS  = 60,       // number of ticks to freeze game when Pacman is eaten
+    PACMAN_DEATH_TICKS  = 150,      // number of ticks to show the Pacman sequence before starting new round
+    GAMEOVER_TICKS      = 3*60,     // number of ticks the game over message is shown
 };
 
 // common tile codes
@@ -148,9 +150,10 @@ typedef enum {
 
 // reasons why game loop is frozen
 typedef enum {
-    FREEZETYPE_PRELUDE   = (1<<0),  // game-loop prelude is active (PLAYER ONE READY!)
-    FREEZETYPE_EAT_GHOST = (1<<1),  // Pacman has eaten a ghost
-    FREEZETYPE_DEAD      = (1<<2),  // Pacman was eaten by ghost
+    FREEZETYPE_PRELUDE   = (1<<0),  // game prelude is active
+    FREEZETYPE_READY     = (1<<1),  // READY! phase is active
+    FREEZETYPE_EAT_GHOST = (1<<2),  // Pacman has eaten a ghost
+    FREEZETYPE_DEAD      = (1<<3),  // Pacman was eaten by ghost
 } freezetype_t;
 
 // a timer holds a specific game-tick when an action should be started
@@ -232,7 +235,9 @@ static struct {
         uint32_t xorshift;      // current xorshift random-number-generator state
         timer_t started;
         timer_t prelude_started;
+        timer_t ready_started;
         timer_t round_started;
+        timer_t gameover;
         timer_t dot_eaten;          // last time Pacman ate a dot
         timer_t pill_eaten;         // last time Pacman ate a pill
         timer_t ghost_eaten;        // last time Pacman ate a ghost
@@ -333,6 +338,7 @@ static void cleanup(void);
 static void input(const sapp_event*);
 
 static void start(timer_t* t);
+static bool now(timer_t t);
 
 static void pacman_tick(void);
 static void intro_tick(void);
@@ -384,8 +390,33 @@ static void init(void) {
 }
 
 static void frame(void) {
-    // FIXME: decouple pacman_tick() from refresh rate
-    pacman_tick();
+    // FIXME: decouple game tick from refresh rate
+    state.tick++;
+
+    // check for game state change
+    if (now(state.intro.started)) {
+        state.gamestate = GAMESTATE_INTRO;
+    }
+    if (now(state.game.started)) {
+        state.gamestate = GAMESTATE_GAME;
+    }
+    if (now(state.hiscore.started)) {
+        state.gamestate = GAMESTATE_HISCORE;
+    }
+
+    // call the top-level game state update function
+    switch (state.gamestate) {
+        case GAMESTATE_INTRO:
+            intro_tick();
+            break;
+        case GAMESTATE_GAME:
+            game_tick();
+            break;
+        case GAMESTATE_HISCORE:
+            hiscore_tick();
+            break;
+    }
+
     gfx_draw();
 }
 
@@ -745,15 +776,15 @@ static void spr_anim_pacman(dir_t dir, uint32_t tick) {
 
 // set sprite to Pacman's death sequence
 static void spr_anim_pacman_death(uint32_t tick) {
-    // the death animation tile sequence starts at sprite tile number
-    // 52 and ends at 62
+    // the death animation tile sequence starts at sprite tile number 52 and ends at 63
     sprite_t* spr = spr_pacman();
     // show the first frame a little bit longer
     uint32_t tile = (tick < 24) ? 52 : 52 + ((tick - 24) / 8);
-    if (tile > 62) {
-        tile = 62;
+    if (tile > 63) {
+        tile = 63;
     }
     spr->tile = tile;
+    spr->flipx = spr->flipy = false;
 }
 
 // set sprite to animated ghost
@@ -954,129 +985,7 @@ static void dbg_marker(int index, int2_t tile_pos, uint8_t tile_code, uint8_t co
     };
 }
 
-/*== TOP-LEVEL GAME CODE =====================================================*/
-static void pacman_tick(void) {
-    state.tick++;
-
-    // check for game state change
-    if (now(state.intro.started)) {
-        state.gamestate = GAMESTATE_INTRO;
-    }
-    if (now(state.game.started)) {
-        state.gamestate = GAMESTATE_GAME;
-    }
-    if (now(state.hiscore.started)) {
-        state.gamestate = GAMESTATE_HISCORE;
-    }
-
-    // call the top-level game state update function
-    switch (state.gamestate) {
-        case GAMESTATE_INTRO:
-            intro_tick();
-            break;
-        case GAMESTATE_GAME:
-            game_tick();
-            break;
-        case GAMESTATE_HISCORE:
-            hiscore_tick();
-            break;
-    }
-}
-
-/*== INTRO GAMESTATE CODE ====================================================*/
-
-static void intro_tick(void) {
-
-    // on intro-state enter, enable input and draw any initial text
-    if (now(state.intro.started)) {
-        start(&state.gfx.fadein);
-        input_enable();
-        vid_clear(TILE_SPACE, COLOR_DEFAULT);
-        vid_text(i2(3,0),  "1UP   HIGH SCORE   2UP");
-        vid_color_score(i2(6,1), COLOR_DEFAULT, 0);
-        if (state.game.hiscore > 0) {
-            vid_color_score(i2(16,1), COLOR_DEFAULT, state.game.hiscore);
-        }
-        vid_text(i2(7,5),  "CHARACTER / NICKNAME");
-        vid_text(i2(3,35), "CREDIT  0");
-        spr_clear();
-        disable(&state.intro.chase);
-    }
-
-    // draw the animated 'ghost image.. name.. nickname' lines
-    uint32_t delay = 30;
-    const char* names[] = { "-SHADOW", "-SPEEDY", "-BASHFUL", "-POKEY" };
-    const char* nicknames[] = { "BLINKY", "PINKY", "INKY", "CLYDE" };
-    for (int i = 0; i < 4; i++) {
-        const uint8_t color = 2*i + 1;
-        const uint8_t y = 3*i + 6;
-        // 2*3 ghost image created from tiles (no sprite!)
-        delay += 30;
-        if (after_once(state.intro.started, delay)) {
-            vid_color_tile(i2(4,y+0), color, TILE_GHOST+0); vid_color_tile(i2(5,y+0), color, TILE_GHOST+1);
-            vid_color_tile(i2(4,y+1), color, TILE_GHOST+2); vid_color_tile(i2(5,y+1), color, TILE_GHOST+3);
-            vid_color_tile(i2(4,y+2), color, TILE_GHOST+4); vid_color_tile(i2(5,y+2), color, TILE_GHOST+5);
-        }
-        // after 1 second, the name of the ghost
-        delay += 60;
-        if (after_once(state.intro.started, delay)) {
-            vid_color_text(i2(7,y+1), color, names[i]);
-        }
-        // after 0.5 seconds, the nickname of the ghost
-        delay += 30;
-        if (after_once(state.intro.started, delay)) {
-            vid_color_text(i2(17,y+1), color, nicknames[i]);
-        }
-    }
-
-    // . 10 PTS
-    // O 50 PTS
-    delay += 60;
-    if (after_once(state.intro.started, delay)) {
-        vid_color_tile(i2(10,24), COLOR_DOT, TILE_DOT);
-        vid_text(i2(12,24), "10 \x5D\x5E\x5F");
-        vid_color_tile(i2(10,26), COLOR_DOT, TILE_PILL);
-        vid_text(i2(12,26), "50 \x5D\x5E\x5F");
-    }
-
-    // blinking "press any key" text
-    delay += 60;
-    if (after(state.intro.started, delay)) {
-        if (since(state.intro.started) & 0x20) {
-            vid_color_text(i2(3,31), 3, "                       ");
-        }
-        else {
-            vid_color_text(i2(3,31), 3, "PRESS ANY KEY TO START!");
-        }
-    }
-
-    // FIXME: animated chase sequence
-
-    // if a key is pressed, advance to game state
-    if (state.input.anykey) {
-        input_disable();
-        start(&state.gfx.fadeout);
-        start_after(&state.game.started, FADE_TICKS);
-    }
-}
-
-/*== HISCORE GAMESTATE CODE ==================================================*/
-static void hiscore_tick(void) {
-    if (now(state.hiscore.started)) {
-        start(&state.gfx.fadein);
-        spr_clear();
-        input_enable();
-        vid_clear(TILE_SPACE, COLOR_DEFAULT);
-        vid_text(i2(7,16), "HISCORE TODO!");
-    }
-    if (state.input.anykey) {
-        input_disable();
-        start(&state.gfx.fadeout);
-        start_after(&state.intro.started, FADE_TICKS);
-    }
-}
-
-/*== ACTUAL GAMESTATE CODE ===================================================*/
+/*== GAMEPLAY CODE ===========================================================*/
 
 // one-time init at start of game state
 static void game_init(void) {
@@ -1087,20 +996,6 @@ static void game_init(void) {
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
         state.game.fruit[i] = (i==0) ? FRUITTYPE_CHERRIES:FRUITTYPE_NONE;
     }
-}
-
-// setup state at start of a game round
-static void game_round_init(void) {
-    spr_clear();
-    state.game.xorshift = 0x12345678;
-    state.game.dot_counter_active = false;
-    state.game.dot_counter = 0;
-    state.game.num_ghosts_eaten = 0;
-    disable(&state.game.dot_eaten);
-    disable(&state.game.pill_eaten);
-    disable(&state.game.ghost_eaten);
-    disable(&state.game.pacman_eaten);
-    disable(&state.game.force_leave_house);
 
     // draw the playfield
     {
@@ -1162,6 +1057,22 @@ static void game_round_init(void) {
         vid_color_text(i2(9,14), 0x5, "PLAYER ONE");
         vid_color_text(i2(11, 20), 0x9, "READY!");
     }
+}
+
+// setup state at start of a game round
+static void game_round_init(void) {
+    spr_clear();
+    state.game.freeze = FREEZETYPE_READY;
+    state.game.xorshift = 0x12345678;
+    state.game.dot_counter_active = false;
+    state.game.dot_counter = 0;
+    state.game.num_ghosts_eaten = 0;
+    disable(&state.game.dot_eaten);
+    disable(&state.game.pill_eaten);
+    disable(&state.game.ghost_eaten);
+    disable(&state.game.pacman_eaten);
+    disable(&state.game.force_leave_house);
+    vid_color_text(i2(11, 20), 0x9, "READY!");
 
     // Pacman starts running to the left
     state.game.pacman = (pacman_t) {
@@ -1288,13 +1199,13 @@ static void game_update_sprites(void) {
                 // hide Pacman shortly after he's eaten a ghost (via an invisible Sprite tile)
                 spr->tile = 30;
             }
-            else if (state.game.freeze & FREEZETYPE_PRELUDE) {
+            else if (state.game.freeze & (FREEZETYPE_PRELUDE|FREEZETYPE_READY)) {
                 // special case game frozen at start of round, show Pacman with 'closed mouth'
                 spr->tile = 48;
             }
             else if (state.game.freeze & FREEZETYPE_DEAD) {
-                if (after(state.game.pacman_eaten, PACMAN_DEATH_TICKS)) {
-                    spr_anim_pacman_death(since(state.game.pacman_eaten) - 2*60);
+                if (after(state.game.pacman_eaten, PACMAN_EATEN_TICKS)) {
+                    spr_anim_pacman_death(since(state.game.pacman_eaten) - PACMAN_EATEN_TICKS);
                 }
             }
             else {
@@ -1311,7 +1222,7 @@ static void game_update_sprites(void) {
             sprite->pos = actor_to_sprite_pos(ghost->actor.pos);
             // if Pacman has just died, ghosts are switched to invisible
             if (state.game.freeze & FREEZETYPE_DEAD) {
-                if (after(state.game.pacman_eaten, PACMAN_DEATH_TICKS)) {
+                if (after(state.game.pacman_eaten, PACMAN_EATEN_TICKS)) {
                     sprite->tile = 30;  // invisible sprite tile
                 }
             }
@@ -1693,8 +1604,6 @@ static void game_update_dot_counters(void) {
 }
 
 static void game_update_actors(void) {
-    // FIXME: check if the next ghost is forced out of the house
-
     // Pacman "AI"
     if (game_pacman_should_move()) {
         // move Pacman with cornering allowed
@@ -1744,8 +1653,17 @@ static void game_update_actors(void) {
                 }
                 else if ((ghost->state == GHOSTSTATE_CHASE) || (ghost->state == GHOSTSTATE_SCATTER)) {
                     // Pacman dies
+                    #if !DBG_GODMODE
                     start(&state.game.pacman_eaten);
                     state.game.freeze |= FREEZETYPE_DEAD;
+                    // start a new round after Pacman-death-sequence has completed, or start game-over sequence
+                    if (state.game.num_lives > 0) {
+                        start_after(&state.game.ready_started, PACMAN_EATEN_TICKS+PACMAN_DEATH_TICKS);
+                    }
+                    else {
+                        start_after(&state.game.gameover, PACMAN_EATEN_TICKS+PACMAN_DEATH_TICKS);
+                    }
+                    #endif
                 }
             }
         }
@@ -1771,39 +1689,35 @@ static void game_update_actors(void) {
 }
 
 static void game_tick(void) {
-    // initialize game state
+    // debug: skip prelude
+    #if DBG_SKIP_PRELUDE
+        const int prelude_ticks_per_sec = 1;
+    #else
+        const int prelude_ticks_per_sec = 60;
+    #endif
+
+    // initialize game state once
     if (now(state.game.started)) {
         start(&state.gfx.fadein);
         start(&state.game.prelude_started);
+        start_after(&state.game.ready_started, 3*prelude_ticks_per_sec);
         game_init();
     }
-    // initialize new round
-    if (now(state.game.prelude_started)) {
+    // initialize new round (each time Pacman looses a life), make actors visible, remove "PLAYER ONE", start a new life
+    if (now(state.game.ready_started)) {
         game_round_init();
-    }
-    // debug: speed the prelude up 
-    #if DBG_SKIP_PRELUDE
-        const int ticks_per_sec = 1;
-    #else
-        const int ticks_per_sec = 60;
-    #endif
-    // after 3 seconds, make actors visible, remove "PLAYER ONE"
-    if (after_once(state.game.prelude_started, 3*ticks_per_sec)) {
         vid_color_text(i2(9,14), 0x10, "          ");
         spr_pacman()->enabled = true;
         for (int i = 0; i < NUM_GHOSTS; i++) {
             spr_ghost(i)->enabled = true;
         }
-        if (NUM_LIVES == state.game.num_lives) {
-            state.game.num_lives = NUM_LIVES - 1;
-        }
-    }
-    // after 5 seconds, the interactive game starts
-    if (after_once(state.game.prelude_started, 5*ticks_per_sec)) {
-        start(&state.game.round_started);
+        assert(state.game.num_lives > 0);
+        state.game.num_lives--;
+        // after 2 seconds start the interactive game loop
+        start_after(&state.game.round_started, 2*60);
     }
     if (now(state.game.round_started)) {
-        state.game.freeze &= ~FREEZETYPE_PRELUDE;
+        state.game.freeze &= ~FREEZETYPE_READY;
         // clear the 'READY!' message
         vid_color_text(i2(11,20), 0x10, "      ");
     }
@@ -1826,11 +1740,21 @@ static void game_tick(void) {
         state.game.hiscore = state.game.score;
     }
 
+    if (now(state.game.gameover)) {
+        // display game over string
+        vid_color_text(i2(9,20), 0x01, "GAME  OVER");
+        input_disable();
+        start_after(&state.gfx.fadeout, GAMEOVER_TICKS);
+        start_after(&state.hiscore.started, GAMEOVER_TICKS+FADE_TICKS);
+    }
+
+    #if DBG_ESCAPE
     if (state.input.esc) {
         input_disable();
         start(&state.gfx.fadeout);
         start_after(&state.hiscore.started, FADE_TICKS);
     }
+    #endif
 
     #if DBG_MARKERS
     // visualize current ghost targets
@@ -1850,6 +1774,99 @@ static void game_tick(void) {
         dbg_marker(i, state.game.ghost[i].target_pos, tile, COLOR_BLINKY+2*i);
     }
     #endif
+}
+
+/*== INTRO GAMESTATE CODE ====================================================*/
+
+static void intro_tick(void) {
+
+    // on intro-state enter, enable input and draw any initial text
+    if (now(state.intro.started)) {
+        start(&state.gfx.fadein);
+        input_enable();
+        vid_clear(TILE_SPACE, COLOR_DEFAULT);
+        vid_text(i2(3,0),  "1UP   HIGH SCORE   2UP");
+        vid_color_score(i2(6,1), COLOR_DEFAULT, 0);
+        if (state.game.hiscore > 0) {
+            vid_color_score(i2(16,1), COLOR_DEFAULT, state.game.hiscore);
+        }
+        vid_text(i2(7,5),  "CHARACTER / NICKNAME");
+        vid_text(i2(3,35), "CREDIT  0");
+        spr_clear();
+        disable(&state.intro.chase);
+    }
+
+    // draw the animated 'ghost image.. name.. nickname' lines
+    uint32_t delay = 30;
+    const char* names[] = { "-SHADOW", "-SPEEDY", "-BASHFUL", "-POKEY" };
+    const char* nicknames[] = { "BLINKY", "PINKY", "INKY", "CLYDE" };
+    for (int i = 0; i < 4; i++) {
+        const uint8_t color = 2*i + 1;
+        const uint8_t y = 3*i + 6;
+        // 2*3 ghost image created from tiles (no sprite!)
+        delay += 30;
+        if (after_once(state.intro.started, delay)) {
+            vid_color_tile(i2(4,y+0), color, TILE_GHOST+0); vid_color_tile(i2(5,y+0), color, TILE_GHOST+1);
+            vid_color_tile(i2(4,y+1), color, TILE_GHOST+2); vid_color_tile(i2(5,y+1), color, TILE_GHOST+3);
+            vid_color_tile(i2(4,y+2), color, TILE_GHOST+4); vid_color_tile(i2(5,y+2), color, TILE_GHOST+5);
+        }
+        // after 1 second, the name of the ghost
+        delay += 60;
+        if (after_once(state.intro.started, delay)) {
+            vid_color_text(i2(7,y+1), color, names[i]);
+        }
+        // after 0.5 seconds, the nickname of the ghost
+        delay += 30;
+        if (after_once(state.intro.started, delay)) {
+            vid_color_text(i2(17,y+1), color, nicknames[i]);
+        }
+    }
+
+    // . 10 PTS
+    // O 50 PTS
+    delay += 60;
+    if (after_once(state.intro.started, delay)) {
+        vid_color_tile(i2(10,24), COLOR_DOT, TILE_DOT);
+        vid_text(i2(12,24), "10 \x5D\x5E\x5F");
+        vid_color_tile(i2(10,26), COLOR_DOT, TILE_PILL);
+        vid_text(i2(12,26), "50 \x5D\x5E\x5F");
+    }
+
+    // blinking "press any key" text
+    delay += 60;
+    if (after(state.intro.started, delay)) {
+        if (since(state.intro.started) & 0x20) {
+            vid_color_text(i2(3,31), 3, "                       ");
+        }
+        else {
+            vid_color_text(i2(3,31), 3, "PRESS ANY KEY TO START!");
+        }
+    }
+
+    // FIXME: animated chase sequence
+
+    // if a key is pressed, advance to game state
+    if (state.input.anykey) {
+        input_disable();
+        start(&state.gfx.fadeout);
+        start_after(&state.game.started, FADE_TICKS);
+    }
+}
+
+/*== HISCORE GAMESTATE CODE ==================================================*/
+static void hiscore_tick(void) {
+    if (now(state.hiscore.started)) {
+        start(&state.gfx.fadein);
+        spr_clear();
+        input_enable();
+        vid_clear(TILE_SPACE, COLOR_DEFAULT);
+        vid_text(i2(7,16), "HISCORE TODO!");
+    }
+    if (state.input.anykey) {
+        input_disable();
+        start(&state.gfx.fadeout);
+        start_after(&state.intro.started, FADE_TICKS);
+    }
 }
 
 /*== GFX SUBSYSTEM ===========================================================*/

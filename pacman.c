@@ -19,6 +19,12 @@
 
 // various constants
 enum {
+    // tick duration in microseconds
+    #if DBG_DOUBLE_SPEED
+        TICK_DURATION   = 8333,
+    #else
+        TICK_DURATION   = 16666,
+    #endif
     DISABLED_TICKS      = 0xFFFFFFFF,   // magic tick value for a disabled timer
     TILE_WIDTH          = 8,
     TILE_HEIGHT         = 8,
@@ -221,8 +227,13 @@ typedef struct {
 // all state is in a single nested struct
 static struct {
 
-    uint32_t tick;          // the central game tick, this drives the whole game
     gamestate_t gamestate;  // the current gamestate (intro => game => hiscore)
+
+    struct {
+        uint32_t tick;          // the central game tick, this drives the whole game
+        uint64_t laptime_store; // helper variable to mease frame duration
+        int32_t tick_accum;     // helper variable to decouple ticks from frame rate
+    } timing;
 
     // intro state
     struct {
@@ -384,8 +395,6 @@ static void init(void) {
     });
     stm_setup();
     saudio_setup(&(saudio_desc){ 0 });
-
-    // initialize subsystems
     gfx_init();
 
     // start into intro screen
@@ -397,36 +406,37 @@ static void init(void) {
 }
 
 static void frame(void) {
-    // FIXME: decouple game tick from refresh rate
-    state.tick++;
 
-    // check for game state change
-    if (now(state.intro.started)) {
-        state.gamestate = GAMESTATE_INTRO;
-    }
-    if (now(state.game.started)) {
-        state.gamestate = GAMESTATE_GAME;
-    }
-    if (now(state.hiscore.started)) {
-        state.gamestate = GAMESTATE_HISCORE;
-    }
+    // run the game at a fixed tick rate regardless of frame rate
+    state.timing.tick_accum += stm_us(stm_laptime(&state.timing.laptime_store));
+    while (state.timing.tick_accum >= TICK_DURATION) {
+        state.timing.tick_accum -= TICK_DURATION;
+        state.timing.tick++;
 
-    // call the top-level game state update function
-    switch (state.gamestate) {
-        case GAMESTATE_INTRO:
-            intro_tick();
-            break;
-        case GAMESTATE_GAME:
-            game_tick();
-            #if DBG_DOUBLE_SPEED
+        // check for game state change
+        if (now(state.intro.started)) {
+            state.gamestate = GAMESTATE_INTRO;
+        }
+        if (now(state.game.started)) {
+            state.gamestate = GAMESTATE_GAME;
+        }
+        if (now(state.hiscore.started)) {
+            state.gamestate = GAMESTATE_HISCORE;
+        }
+
+        // call the top-level game state update function
+        switch (state.gamestate) {
+            case GAMESTATE_INTRO:
+                intro_tick();
+                break;
+            case GAMESTATE_GAME:
                 game_tick();
-            #endif
-            break;
-        case GAMESTATE_HISCORE:
-            hiscore_tick();
-            break;
+                break;
+            case GAMESTATE_HISCORE:
+                hiscore_tick();
+                break;
+        }
     }
-
     gfx_draw();
 }
 
@@ -480,12 +490,12 @@ static uint32_t xorshift32(void) {
 
 // set a timer to the next game tick
 static void start(timer_t* t) {
-    t->tick = state.tick + 1;
+    t->tick = state.timing.tick + 1;
 }
 
 // set a timer to a future tick
 static void start_after(timer_t* t, uint32_t ticks) {
-    t->tick = state.tick + ticks;
+    t->tick = state.timing.tick + ticks;
 }
 
 // deactivate a timer
@@ -500,13 +510,13 @@ static timer_t disabled_timer(void) {
 
 // check if a timer is triggered
 static bool now(timer_t t) {
-    return t.tick == state.tick;
+    return t.tick == state.timing.tick;
 }
 
 // return the number of ticks since a timer was triggered
 static uint32_t since(timer_t t) {
-    if (state.tick >= t.tick) {
-        return state.tick - t.tick;
+    if (state.timing.tick >= t.tick) {
+        return state.timing.tick - t.tick;
     }
     else {
         return DISABLED_TICKS;
@@ -1211,7 +1221,7 @@ static void game_update_tiles(void) {
             vid_color(pill_pos[i], COLOR_DOT);
         }
         else {
-            vid_color(pill_pos[i], (state.tick & 0x8) ? 0x10:0);
+            vid_color(pill_pos[i], (state.timing.tick & 0x8) ? 0x10:0);
         }
     }
 
@@ -1339,7 +1349,7 @@ static bool game_pacman_should_move(void) {
         // needs to be adjusted based on the game round
         // FIXME: during frighten phase, Pacman also speeds
         // up during levels 1..4
-        return 0 != (state.tick % 5);
+        return 0 != (state.timing.tick % 5);
     }
 }
 
@@ -1354,21 +1364,21 @@ static int game_ghost_speed(const ghost_t* ghost) {
         case GHOSTSTATE_HOUSE:
         case GHOSTSTATE_LEAVEHOUSE:
             // inside house at half speed (estimated)
-            return state.tick & 1;
+            return state.timing.tick & 1;
         case GHOSTSTATE_FRIGHTENED:
             // move at 50% speed when frightened
-            return state.tick & 1;
+            return state.timing.tick & 1;
         case GHOSTSTATE_EYES:
         case GHOSTSTATE_ENTERHOUSE:
             // estimated 1.5x when hollow, Pacman Dossier is silent on this
-            return (state.tick & 1) ? 1 : 2;
+            return (state.timing.tick & 1) ? 1 : 2;
         default:
             // in tunnel, move at 40%, otherwise 75%
             if (is_tunnel(pixel_to_tile_pos(ghost->actor.pos))) {
-                return ((state.tick * 2) % 4) ? 1 : 0;
+                return ((state.timing.tick * 2) % 4) ? 1 : 0;
             }
             else {
-                return (state.tick % 4) ? 1 : 0;
+                return (state.timing.tick % 4) ? 1 : 0;
             }
     }
 }

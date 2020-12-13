@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.0)
 project(pacman)
 set(CMAKE_C_STANDARD 11)
+if (CMAKE_SYSTEM_NAME STREQUAL Emscripten)
+    set(CMAKE_EXECUTABLE_SUFFIX ".html")
+endif()
 
 #=== LIBRARY: sokol
 # add headers to the the file list because they are useful to have in IDEs
@@ -33,7 +36,13 @@ else()
     add_executable(pacman pacman.c)
 endif()
 target_link_libraries(pacman sokol)
+if (CMAKE_SYSTEM_NAME STREQUAL Emscripten)
+    target_link_options(pacman PUBLIC --shell-file ../sokol/shell.html)
+    target_link_options(pacman PUBLIC -sNO_FILESYSTEM=1 -sASSERTIONS=0 -sMALLOC=emmalloc --closure=1)
+    #target_link_options(pacman PUBLIC "--closure 1")
+endif()
+
 # explicitly strip dead code
-if (CMAKE_C_COMPILER_ID MATCHES "Clang")
+if (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_SYSTEM_NAME STREQUAL Emscripten)
     target_link_options(pacman PRIVATE LINKER:-dead_strip)
 endif()

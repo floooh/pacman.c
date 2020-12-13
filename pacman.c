@@ -2128,6 +2128,45 @@ static void gfx_create_resources(void) {
                 "  frag_color = texture(tex, uv);\n"
                 "}\n";
                 break;
+        case SG_BACKEND_GLES2:
+            offscreen_vs_src =
+                "attribute vec4 pos;\n"
+                "attribute vec2 uv_in;\n"
+                "attribute vec4 data_in;\n"
+                "varying vec2 uv;\n"
+                "varying vec4 data;\n"
+                "void main() {\n"
+                "  gl_Position = vec4((pos.xy - 0.5) * vec2(2.0, -2.0), 0.5, 1.0);\n"
+                "  uv  = uv_in;"
+                "  data = data_in;\n"
+                "}\n";
+            offscreen_fs_src =
+                "precision mediump float;\n"
+                "uniform sampler2D tile_tex;\n"
+                "uniform sampler2D pal_tex;\n"
+                "varying vec2 uv;\n"
+                "varying vec4 data;\n"
+                "void main() {\n"
+                "  float color_code = data.x;\n"
+                "  float tile_color = texture2D(tile_tex, uv).x;\n"
+                "  vec2 pal_uv = vec2(color_code * 4.0 + tile_color, 0.0);\n"
+                "  gl_FragColor = texture2D(pal_tex, pal_uv) * vec4(1.0, 1.0, 1.0, data.y);\n"
+                "}\n";
+            display_vs_src =
+                "attribute vec4 pos;\n"
+                "varying vec2 uv;\n"
+                "void main() {\n"
+                "  gl_Position = vec4((pos.xy - 0.5) * 2.0, 0.0, 1.0);\n"
+                "  uv = pos.xy;\n"
+                "}\n";
+            display_fs_src =
+                "precision mediump float;\n"
+                "uniform sampler2D tex;\n"
+                "varying vec2 uv;\n"
+                "void main() {\n"
+                "  gl_FragColor = texture2D(tex, uv);\n"
+                "}\n";
+                break;
         default:
             assert(false);
     }
@@ -2136,9 +2175,9 @@ static void gfx_create_resources(void) {
     state.gfx.offscreen.pip = sg_make_pipeline(&(sg_pipeline_desc){
         .shader = sg_make_shader(&(sg_shader_desc){
            .attrs = {
-                [0] = { .sem_name="POSITION" },
-                [1] = { .sem_name="TEXCOORD", .sem_index=0 },
-                [2] = { .sem_name="TEXCOORD", .sem_index=1 },
+                [0] = { .name="pos", .sem_name="POSITION" },
+                [1] = { .name="uv_in", .sem_name="TEXCOORD", .sem_index=0 },
+                [2] = { .name="data_in", .sem_name="TEXCOORD", .sem_index=1 },
             },
             .vs.source = offscreen_vs_src,
             .fs = {
@@ -2166,7 +2205,7 @@ static void gfx_create_resources(void) {
     // create pipeline and shader for rendering into display
     state.gfx.display.pip = sg_make_pipeline(&(sg_pipeline_desc){
         .shader = sg_make_shader(&(sg_shader_desc){
-            .attrs[0].sem_name="POSITION",
+            .attrs[0] = { .name="pos", .sem_name="POSITION" },
             .vs.source = display_vs_src,
             .fs = {
                 .images[0] = { .name = "tex", .type = SG_IMAGETYPE_2D },

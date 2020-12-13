@@ -5,7 +5,7 @@ A Pacman clone written in C99 with minimal dependencies for Windows, macOS and L
 For implementation details see comments in the pacman.c source file (I've tried
 to structure the source code so that it can be read from top to bottom).
 
-## Clone, Build and Run
+## Clone, Build and Run (Linux, macOS, Windows)
 
 On the command line:
 
@@ -32,6 +32,32 @@ On Windows, the executable is in a subdirectory:
 ```
 Debug/pacman.exe
 ```
+
+## Build and Run WASM/HTML version via Emscripten (Linux, macOS)
+
+Setup the emscripten SDK as described here:
+
+https://emscripten.org/docs/getting_started/downloads.html#installation-instructions
+
+Don't forget to run ```source ./emsdk_env.sh``` after activating the SDK.
+
+And then in the pacman.c directory:
+
+```
+mkdir build
+cd build
+emcmake cmake -DCMAKE_BUILD_TYPE=MinSizeRel ..
+cmake --build .
+```
+
+To run the compilation result in the system web browser:
+
+```
+> emrun pacman.html
+```
+
+(this procedure should also work on Windows with ```make``` in the path, but
+is currently untested)
 
 ## IDE Support
 

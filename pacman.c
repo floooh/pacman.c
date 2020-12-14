@@ -13,7 +13,7 @@
 #define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
 #define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
-#define DBG_ESCAPE          (0)     // set to (1) to leave game loop with Esc
+#define DBG_ESCAPE          (1)     // set to (1) to leave game loop with Esc
 #define DBG_DOUBLE_SPEED    (0)     // set to (1) to speed up game (useful with godmode)
 #define DBG_GODMODE         (1)     // set to (1) to disable dying
 
@@ -51,6 +51,7 @@ enum {
     PACMAN_DEATH_TICKS  = 150,      // number of ticks to show the Pacman sequence before starting new round
     GAMEOVER_TICKS      = 3*60,     // number of ticks the game over message is shown
     ROUNDWON_TICKS      = 4*60,     // number of ticks to wait after a round was won
+    FRUITACTIVE_TICKS   = 10*60,    // number of ticks a bonus fruit is shown
 };
 
 // common tile codes
@@ -69,6 +70,24 @@ enum {
     TILE_GALAXIAN       = 0xA8,      // 0xA8..0xAB
     TILE_KEY            = 0xAC,      // 0xAC..0xAF
     TILE_DOOR           = 0xCF,      // the ghost-house door
+};
+
+// common sprite tile codes
+enum {
+    SPRITETILE_INVISIBLE    = 30,
+    SPRITETILE_SCORE_200    = 40,
+    SPRITETILE_SCORE_400    = 41,
+    SPRITETILE_SCORE_800    = 42,
+    SPRITETILE_SCORE_1600   = 43,
+    SPRITETILE_CHERRIES     = 0,
+    SPRITETILE_STRAWBERRY   = 1,
+    SPRITETILE_PEACH        = 2,
+    SPRITETILE_BELL         = 3,
+    SPRITETILE_APPLE        = 4,
+    SPRITETILE_GRAPES       = 5,
+    SPRITETILE_GALAXIAN     = 6,
+    SPRITETILE_KEY          = 7,
+    SPRITETILE_PACMAN_CLOSED_MOUTH = 48,
 };
 
 // common color codes
@@ -113,16 +132,16 @@ typedef enum {
 
 // fruit types
 typedef enum {
-    FRUITTYPE_NONE,
-    FRUITTYPE_CHERRIES,
-    FRUITTYPE_STRAWBERRY,
-    FRUITTYPE_PEACH,
-    FRUITTYPE_APPLE,
-    FRUITTYPE_GRAPES,
-    FRUITTYPE_GALAXIAN,
-    FRUITTYPE_BELL,
-    FRUITTYPE_KEY,
-    NUM_FRUITTYPES
+    FRUIT_NONE,
+    FRUIT_CHERRIES,
+    FRUIT_STRAWBERRY,
+    FRUIT_PEACH,
+    FRUIT_APPLE,
+    FRUIT_GRAPES,
+    FRUIT_GALAXIAN,
+    FRUIT_BELL,
+    FRUIT_KEY,
+    NUM_FRUITS
 } fruit_t;
 
 // sprite indices
@@ -250,11 +269,12 @@ static struct {
         trigger_t round_started;
         trigger_t round_won;
         trigger_t game_over;
-        trigger_t dot_eaten;          // last time Pacman ate a dot
-        trigger_t pill_eaten;         // last time Pacman ate a pill
-        trigger_t ghost_eaten;        // last time Pacman ate a ghost
-        trigger_t pacman_eaten;       // last time Pacman was eaten by a ghost
-        trigger_t force_leave_house;  // starts when a dot is eaten
+        trigger_t dot_eaten;            // last time Pacman ate a dot
+        trigger_t pill_eaten;           // last time Pacman ate a pill
+        trigger_t ghost_eaten;          // last time Pacman ate a ghost
+        trigger_t pacman_eaten;         // last time Pacman was eaten by a ghost
+        trigger_t force_leave_house;    // starts when a dot is eaten
+        trigger_t fruit_active;         // starts when bonus fruit is shown
         uint8_t freeze;             // combination of FREEZETYPE_* flags
         uint8_t round;              // current game round, 0, 1, 2...
         uint32_t score;             // score / 10
@@ -265,7 +285,8 @@ static struct {
         uint8_t global_dot_counter;         // the global dot counter for the ghost-house-logic
         ghost_t ghost[NUM_GHOSTS];
         pacman_t pacman;
-        fruit_t fruit[NUM_STATUS_FRUITS];
+        fruit_t active_fruit;
+        fruit_t eaten_fruits[NUM_STATUS_FRUITS];
     } game;
 
     // the current input state
@@ -342,6 +363,54 @@ static const int2_t ghost_house_target_pos[NUM_GHOSTS] = {
     { 14*8, 17*8 + 4 },
     { 12*8, 17*8 + 4 },
     { 16*8, 17*8 + 4 },
+};
+
+// fruit tiles, sprite tiles and colors
+uint8_t fruit_tiles_colors[NUM_FRUITS][3] = {
+    { 0, 0, 0 },   // FRUIT_NONE
+    { TILE_CHERRIES,    SPRITETILE_CHERRIES,    COLOR_CHERRIES },
+    { TILE_STRAWBERRY,  SPRITETILE_STRAWBERRY,  COLOR_STRAWBERRY },
+    { TILE_PEACH,       SPRITETILE_PEACH,       COLOR_PEACH },
+    { TILE_APPLE,       SPRITETILE_APPLE,       COLOR_APPLE },
+    { TILE_GRAPES,      SPRITETILE_GRAPES,      COLOR_GRAPES },
+    { TILE_GALAXIAN,    SPRITETILE_GALAXIAN,    COLOR_GALAXIAN },
+    { TILE_BELL,        SPRITETILE_BELL,        COLOR_BELL },
+    { TILE_KEY,         SPRITETILE_KEY,         COLOR_KEY }
+};
+
+// level specifications (see pacman_dossier.pdf)
+typedef struct {
+    fruit_t bonus_fruit;
+    uint16_t bonus_score;
+    // FIXME: the various Pacman and ghost speeds
+} levelspec_t;
+
+enum {
+    MAX_LEVELSPEC = 21,
+};
+static levelspec_t levelspec_table[MAX_LEVELSPEC] = {
+    { FRUIT_CHERRIES,   100 },
+    { FRUIT_STRAWBERRY, 300 },
+    { FRUIT_PEACH,      500 },
+    { FRUIT_PEACH,      500 },
+    { FRUIT_APPLE,      700 },
+    { FRUIT_APPLE,      700 },
+    { FRUIT_GRAPES,     1000 },
+    { FRUIT_GRAPES,     1000 },
+    { FRUIT_GALAXIAN,   2000 },
+    { FRUIT_GALAXIAN,   2000 },
+    { FRUIT_BELL,       3000 },
+    { FRUIT_BELL,       3000 },
+    { FRUIT_KEY,        5000 },
+    { FRUIT_KEY,        5000 },
+    { FRUIT_KEY,        5000 },
+    { FRUIT_KEY,        5000 },
+    { FRUIT_KEY,        5000 },
+    { FRUIT_KEY,        5000 },
+    { FRUIT_KEY,        5000 },
+    { FRUIT_KEY,        5000 },
+    { FRUIT_KEY,        5000 },
+    // from here on repeating
 };
 
 // forward declarations
@@ -479,6 +548,14 @@ static uint32_t xorshift32(void) {
     x ^= x>>17;
     x ^= x<<5;
     return state.game.xorshift = x;
+}
+
+// get level spec for a game round
+static levelspec_t levelspec(uint8_t round) {
+    if (round >= MAX_LEVELSPEC) {
+        round = MAX_LEVELSPEC-1;
+    }
+    return levelspec_table[round];
 }
 
 // set a timer to the next game tick
@@ -1089,7 +1166,7 @@ static void game_init(void) {
     state.game.num_dots_eaten = 0;
     state.game.score = 0;
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
-        state.game.fruit[i] = (i==0) ? FRUITTYPE_CHERRIES:FRUITTYPE_NONE;
+        state.game.eaten_fruits[i] = (i==0) ? FRUIT_CHERRIES:FRUIT_NONE;
     }
 
     // draw the playfield and PLAYER ONE READY! message
@@ -1129,6 +1206,7 @@ static void game_round_init(void) {
     }
     assert(state.game.num_lives >= 0);
 
+    state.game.active_fruit = FRUIT_NONE;
     state.game.freeze = FREEZETYPE_READY;
     state.game.xorshift = 0x12345678;
     state.game.num_ghosts_eaten = 0;
@@ -1239,20 +1317,9 @@ static void game_update_tiles(void) {
         vid_draw_tile_quad(i2(2+2*i,34), color, TILE_LIFE);
     }
     // draw fruit table
-    uint8_t fruit_tiles_colors[NUM_FRUITTYPES][2] = {
-        { 0, 0 },   // FRUIT_NONE
-        { TILE_CHERRIES, COLOR_CHERRIES },
-        { TILE_STRAWBERRY, COLOR_STRAWBERRY },
-        { TILE_PEACH, COLOR_PEACH },
-        { TILE_APPLE, COLOR_APPLE },
-        { TILE_GRAPES, COLOR_GRAPES },
-        { TILE_GALAXIAN, COLOR_GALAXIAN },
-        { TILE_BELL, COLOR_BELL, },
-        { TILE_KEY, COLOR_KEY }
-    };
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
-        uint8_t tile_code = fruit_tiles_colors[state.game.fruit[i]][0];
-        uint8_t color_code = fruit_tiles_colors[state.game.fruit[i]][1];
+        uint8_t tile_code = fruit_tiles_colors[state.game.eaten_fruits[i]][0];
+        uint8_t color_code = fruit_tiles_colors[state.game.eaten_fruits[i]][2];
         vid_draw_tile_quad(i2(24-2*i,34), color_code, tile_code);
     }
 
@@ -1276,11 +1343,11 @@ static void game_update_sprites(void) {
             spr->pos = actor_to_sprite_pos(actor->pos);
             if (state.game.freeze & FREEZETYPE_EAT_GHOST) {
                 // hide Pacman shortly after he's eaten a ghost (via an invisible Sprite tile)
-                spr->tile = 30;
+                spr->tile = SPRITETILE_INVISIBLE;
             }
             else if (state.game.freeze & (FREEZETYPE_PRELUDE|FREEZETYPE_READY)) {
                 // special case game frozen at start of round, show Pacman with 'closed mouth'
-                spr->tile = 48;
+                spr->tile = SPRITETILE_PACMAN_CLOSED_MOUTH;
             }
             else if (state.game.freeze & FREEZETYPE_DEAD) {
                 if (after(state.game.pacman_eaten, PACMAN_EATEN_TICKS)) {
@@ -1302,19 +1369,19 @@ static void game_update_sprites(void) {
             // if Pacman has just died, ghosts are switched to invisible
             if (state.game.freeze & FREEZETYPE_DEAD) {
                 if (after(state.game.pacman_eaten, PACMAN_EATEN_TICKS)) {
-                    sprite->tile = 30;  // invisible sprite tile
+                    sprite->tile = SPRITETILE_INVISIBLE;
                 }
             }
             // if Pacman has won the round, hide ghosts
             else if (state.game.freeze & FREEZETYPE_WON) {
-                sprite->tile = 30;
+                sprite->tile = SPRITETILE_INVISIBLE;
             }
             else switch (ghost->state) {
                 case GHOSTSTATE_EYES:
                     if (before(ghost->eaten, GHOST_EATEN_FREEZE_TICKS)) {
                         // show the ghost-eaten-score, sprite index 40 is the '200'
                         // sprite image, followed by '400', '800' and '1600'
-                        sprite->tile = 40 + state.game.num_ghosts_eaten - 1;
+                        sprite->tile = SPRITETILE_SCORE_200 + state.game.num_ghosts_eaten - 1;
                         sprite->color = COLOR_GHOST_SCORE;
                     }
                     else {
@@ -1338,7 +1405,17 @@ static void game_update_sprites(void) {
         }
     }
 
-    // FIXME: update fruit sprite
+    // bonus fruit (if currently active)
+    if (state.game.active_fruit == FRUIT_NONE) {
+        spr_fruit()->enabled = false;
+    }
+    else {
+        sprite_t* spr = spr_fruit();
+        spr->enabled = true;
+        spr->pos = i2(13 * TILE_WIDTH, 19 * TILE_HEIGHT + TILE_HEIGHT/2);
+        spr->tile = fruit_tiles_colors[state.game.active_fruit][1];
+        spr->color = fruit_tiles_colors[state.game.active_fruit][2];
+    }
 }
 
 // return true if Pacman should move in this tick
@@ -1669,9 +1746,9 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
     If pacman doesn't eat dots for a while, the next ghost is forced out of the
     house using a timer.
 */
-static void game_update_dot_counters(void) {
-    // if a life was lost round, use the global dot counter (this will)
-    // be deactivated again after all ghosts left the house
+static void game_update_ghosthouse_dot_counters(void) {
+    // if a life was lost round, use the global dot counter (this will
+    // be deactivated again after all ghosts left the house)
     if (state.game.global_dot_counter_active) {
         state.game.global_dot_counter++;
     }
@@ -1682,6 +1759,21 @@ static void game_update_dot_counters(void) {
                 break;
             }
         }
+    }
+}
+
+/* called when a dot or pill has been eaten, checks if a round has been won
+    (all dots and pills eaten), and whether to show the bonus fruit
+*/
+static void game_update_dots_eaten(void) {
+    state.game.num_dots_eaten++;
+    if (state.game.num_dots_eaten == NUM_DOTS) {
+        // all dots eaten, round won
+        start(&state.game.round_won);
+    }
+    else if ((state.game.num_dots_eaten == 70) || (state.game.num_dots_eaten == 170)) {
+        // at 70 and 170 dots, show the bonus fruit
+        start(&state.game.fruit_active);
     }
 }
 
@@ -1706,21 +1798,17 @@ static void game_update_actors(void) {
         if (is_dot(tile_pos)) {
             vid_tile(tile_pos, TILE_SPACE);
             state.game.score += 1;
-            if (++state.game.num_dots_eaten == NUM_DOTS) {
-                start(&state.game.round_won);
-            }
             start(&state.game.dot_eaten);
             start(&state.game.force_leave_house);
-            game_update_dot_counters();
+            game_update_dots_eaten();
+            game_update_ghosthouse_dot_counters();
         }
         if (is_pill(tile_pos)) {
             vid_tile(tile_pos, TILE_SPACE);
             state.game.score += 5;
-            if (++state.game.num_dots_eaten == NUM_DOTS) {
-                start(&state.game.round_won);
-            }
-            state.game.num_ghosts_eaten = 0;
+            game_update_dots_eaten();
             start(&state.game.pill_eaten);
+            state.game.num_ghosts_eaten = 0;
             for (int i = 0; i < NUM_GHOSTS; i++) {
                 start(&state.game.ghost[i].frightened);
             }
@@ -1801,6 +1889,14 @@ static void game_tick(void) {
         state.game.freeze &= ~FREEZETYPE_READY;
         // clear the 'READY!' message
         vid_color_text(i2(11,20), 0x10, "      ");
+    }
+
+    // activate/deactivate bonus fruit
+    if (now(state.game.fruit_active)) {
+        state.game.active_fruit = levelspec(state.game.round).bonus_fruit;
+    }
+    else if (after_once(state.game.fruit_active, FRUITACTIVE_TICKS)) {
+        state.game.active_fruit = FRUIT_NONE;
     }
 
     // if game is frozen because Pacman ate a ghost, unfreeze after a while

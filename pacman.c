@@ -10,8 +10,8 @@
 #include <string.h> // memset()
 #include <stdlib.h> // abs()
 
-#define DBG_SKIP_INTRO      (0)     // set to (1) to skip intro
-#define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
+#define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
+#define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
 #define DBG_ESCAPE          (0)     // set to (1) to leave game loop with Esc
 #define DBG_DOUBLE_SPEED    (0)     // set to (1) to speed up game (useful with godmode)
@@ -243,6 +243,7 @@ static struct {
     // game state
     struct {
         uint32_t xorshift;      // current xorshift random-number-generator state
+        uint32_t hiscore;           // hiscore / 10
         timer_t started;
         timer_t prelude_started;
         timer_t ready_started;
@@ -255,8 +256,8 @@ static struct {
         timer_t pacman_eaten;       // last time Pacman was eaten by a ghost
         timer_t force_leave_house;  // starts when a dot is eaten
         uint8_t freeze;             // combination of FREEZETYPE_* flags
+        uint8_t round;              // 1, 2, ...
         uint32_t score;             // score / 10
-        uint32_t hiscore;           // hiscore / 10
         int8_t num_lives;
         uint8_t num_ghosts_eaten;   // number of ghosts easten with current pill
         uint8_t num_dots_eaten;     // if == NUM_DOTS, Pacman wins the round
@@ -1102,6 +1103,9 @@ static void game_init(void) {
 static void game_round_init(void) {
     spr_clear();
 
+    // clear the "READY!" text
+    vid_color_text(i2(9,14), 0x10, "          ");
+
     /* if a new round was started because Pacman has "won" (eaten all dots),
         redraw the playfield and reset the global dot counter
     */
@@ -1140,7 +1144,7 @@ static void game_round_init(void) {
             .pos = { 14*8, 26*8+4 },
         },
     };
-    state.gfx.sprite[SPRITE_PACMAN] = (sprite_t) { .enabled=false, .color=COLOR_PACMAN };
+    state.gfx.sprite[SPRITE_PACMAN] = (sprite_t) { .enabled = true, .color = COLOR_PACMAN };
 
     // Blinky starts outside the ghost house, looking to the left, and in scatter mode
     state.game.ghost[GHOSTTYPE_BLINKY] = (ghost_t) {
@@ -1156,7 +1160,7 @@ static void game_round_init(void) {
         .dot_counter = 0,
         .dot_limit = 0
     };
-    state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = false, .color = COLOR_BLINKY };
+    state.gfx.sprite[SPRITE_BLINKY] = (sprite_t) { .enabled = true, .color = COLOR_BLINKY };
 
     // Pinky starts in the middle slot of the ghost house, moving down
     state.game.ghost[GHOSTTYPE_PINKY] = (ghost_t) {
@@ -1172,7 +1176,7 @@ static void game_round_init(void) {
         .dot_counter = 0,
         .dot_limit = 0
     };
-    state.gfx.sprite[SPRITE_PINKY] = (sprite_t) { .enabled = false, .color = COLOR_PINKY };
+    state.gfx.sprite[SPRITE_PINKY] = (sprite_t) { .enabled = true, .color = COLOR_PINKY };
 
     // Inky starts in the left slot of the ghost house moving up
     state.game.ghost[GHOSTTYPE_INKY] = (ghost_t) {
@@ -1189,7 +1193,7 @@ static void game_round_init(void) {
         // FIXME: needs to be adjusted by current round!
         .dot_limit = 30
     };
-    state.gfx.sprite[SPRITE_INKY] = (sprite_t) { .enabled = false, .color = COLOR_INKY };
+    state.gfx.sprite[SPRITE_INKY] = (sprite_t) { .enabled = true, .color = COLOR_INKY };
 
     // Clyde starts in the right slot of the ghost house, moving up
     state.game.ghost[GHOSTTYPE_CLYDE] = (ghost_t) {
@@ -1206,7 +1210,7 @@ static void game_round_init(void) {
         // FIXME: needs to be adjusted by current round!
         .dot_limit = 60,
     };
-    state.gfx.sprite[SPRITE_CLYDE] = (sprite_t) { .enabled = false, .color = COLOR_CLYDE };
+    state.gfx.sprite[SPRITE_CLYDE] = (sprite_t) { .enabled = true, .color = COLOR_CLYDE };
 }
 
 static void game_update_tiles(void) {
@@ -1788,11 +1792,6 @@ static void game_tick(void) {
     // initialize new round (each time Pacman looses a life), make actors visible, remove "PLAYER ONE", start a new life
     if (now(state.game.ready_started)) {
         game_round_init();
-        vid_color_text(i2(9,14), 0x10, "          ");
-        spr_pacman()->enabled = true;
-        for (int i = 0; i < NUM_GHOSTS; i++) {
-            spr_ghost(i)->enabled = true;
-        }
         // after 2 seconds start the interactive game loop
         start_after(&state.game.round_started, 2*60);
     }

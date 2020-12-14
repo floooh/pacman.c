@@ -168,7 +168,7 @@ typedef enum {
 // a timer holds a specific game-tick when an action should be started
 typedef struct {
     uint32_t tick;
-} timer_t;
+} trigger_t;
 
 // a 2D integer vector (used both for pixel- and tile-coordinates)
 typedef struct {
@@ -190,8 +190,8 @@ typedef struct {
     dir_t next_dir;
     int2_t target_pos;
     ghoststate_t state;
-    timer_t frightened;
-    timer_t eaten;
+    trigger_t frightened;
+    trigger_t eaten;
     uint16_t dot_counter;
     uint16_t dot_limit;
 } ghost_t;
@@ -236,25 +236,25 @@ static struct {
 
     // intro state
     struct {
-        timer_t started;
-        timer_t chase;
+        trigger_t started;
+        trigger_t chase;
     } intro;
 
     // game state
     struct {
         uint32_t xorshift;      // current xorshift random-number-generator state
         uint32_t hiscore;           // hiscore / 10
-        timer_t started;
-        timer_t prelude_started;
-        timer_t ready_started;
-        timer_t round_started;
-        timer_t round_won;
-        timer_t game_over;
-        timer_t dot_eaten;          // last time Pacman ate a dot
-        timer_t pill_eaten;         // last time Pacman ate a pill
-        timer_t ghost_eaten;        // last time Pacman ate a ghost
-        timer_t pacman_eaten;       // last time Pacman was eaten by a ghost
-        timer_t force_leave_house;  // starts when a dot is eaten
+        trigger_t started;
+        trigger_t prelude_started;
+        trigger_t ready_started;
+        trigger_t round_started;
+        trigger_t round_won;
+        trigger_t game_over;
+        trigger_t dot_eaten;          // last time Pacman ate a dot
+        trigger_t pill_eaten;         // last time Pacman ate a pill
+        trigger_t ghost_eaten;        // last time Pacman ate a ghost
+        trigger_t pacman_eaten;       // last time Pacman was eaten by a ghost
+        trigger_t force_leave_house;  // starts when a dot is eaten
         uint8_t freeze;             // combination of FREEZETYPE_* flags
         uint8_t round;              // current game round, 0, 1, 2...
         uint32_t score;             // score / 10
@@ -282,8 +282,8 @@ static struct {
     // the gfx subsystem implements a simple tile+sprite renderer
     struct {
         // fade-in/out timers and current value
-        timer_t fadein;
-        timer_t fadeout;
+        trigger_t fadein;
+        trigger_t fadeout;
         uint8_t fade;
 
         // the 36x28 tile framebuffer
@@ -350,8 +350,8 @@ static void frame(void);
 static void cleanup(void);
 static void input(const sapp_event*);
 
-static void start(timer_t* t);
-static bool now(timer_t t);
+static void start(trigger_t* t);
+static bool now(trigger_t t);
 
 static void pacman_tick(void);
 static void intro_tick(void);
@@ -482,32 +482,32 @@ static uint32_t xorshift32(void) {
 }
 
 // set a timer to the next game tick
-static void start(timer_t* t) {
+static void start(trigger_t* t) {
     t->tick = state.timing.tick + 1;
 }
 
 // set a timer to a future tick
-static void start_after(timer_t* t, uint32_t ticks) {
+static void start_after(trigger_t* t, uint32_t ticks) {
     t->tick = state.timing.tick + ticks;
 }
 
 // deactivate a timer
-static void disable(timer_t* t) {
+static void disable(trigger_t* t) {
     t->tick = DISABLED_TICKS;
 }
 
 // return a disabled timer
-static timer_t disabled_timer(void) {
-    return (timer_t) { .tick = DISABLED_TICKS };
+static trigger_t disabled_timer(void) {
+    return (trigger_t) { .tick = DISABLED_TICKS };
 }
 
 // check if a timer is triggered
-static bool now(timer_t t) {
+static bool now(trigger_t t) {
     return t.tick == state.timing.tick;
 }
 
 // return the number of ticks since a timer was triggered
-static uint32_t since(timer_t t) {
+static uint32_t since(trigger_t t) {
     if (state.timing.tick >= t.tick) {
         return state.timing.tick - t.tick;
     }
@@ -517,7 +517,7 @@ static uint32_t since(timer_t t) {
 }
 
 // check if a timer is between begin and end tick
-static bool between(timer_t t, uint32_t begin, uint32_t end) {
+static bool between(trigger_t t, uint32_t begin, uint32_t end) {
     assert((begin >= 0) && (begin < end));
     if (t.tick != DISABLED_TICKS) {
         uint32_t ticks = since(t);
@@ -529,12 +529,12 @@ static bool between(timer_t t, uint32_t begin, uint32_t end) {
 }
 
 // check if a timer was triggered exactly N ticks ago
-static bool after_once(timer_t t, uint32_t ticks) {
+static bool after_once(trigger_t t, uint32_t ticks) {
     return since(t) == ticks;
 }
 
 // check if a timer was trigger more then N ticks ago
-static bool after(timer_t t, uint32_t ticks) {
+static bool after(trigger_t t, uint32_t ticks) {
     uint32_t s = since(t);
     if (s != DISABLED_TICKS) {
         return s >= ticks;
@@ -545,7 +545,7 @@ static bool after(timer_t t, uint32_t ticks) {
 }
 
 // same as between(t, 0, ticks)
-static bool before(timer_t t, uint32_t ticks) {
+static bool before(trigger_t t, uint32_t ticks) {
     uint32_t s = since(t);
     if (s != DISABLED_TICKS) {
         return s < ticks;

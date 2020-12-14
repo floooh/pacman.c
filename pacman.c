@@ -15,7 +15,7 @@
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
 #define DBG_ESCAPE          (0)     // set to (1) to leave game loop with Esc
 #define DBG_DOUBLE_SPEED    (0)     // set to (1) to speed up game (useful with godmode)
-#define DBG_GODMODE         (0)     // set to (1) to disable dying
+#define DBG_GODMODE         (1)     // set to (1) to disable dying
 
 // various constants
 enum {
@@ -256,7 +256,7 @@ static struct {
         timer_t pacman_eaten;       // last time Pacman was eaten by a ghost
         timer_t force_leave_house;  // starts when a dot is eaten
         uint8_t freeze;             // combination of FREEZETYPE_* flags
-        uint8_t round;              // 1, 2, ...
+        uint8_t round;              // current game round, 0, 1, 2...
         uint32_t score;             // score / 10
         int8_t num_lives;
         uint8_t num_ghosts_eaten;   // number of ghosts easten with current pill
@@ -1081,6 +1081,7 @@ static void game_disable_timers(void) {
 static void game_init(void) {
     input_enable();
     game_disable_timers();
+    state.game.round = 0;
     state.game.freeze = FREEZETYPE_PRELUDE;
     state.game.num_lives = NUM_LIVES;
     state.game.global_dot_counter_active = false;
@@ -1110,6 +1111,7 @@ static void game_round_init(void) {
         redraw the playfield and reset the global dot counter
     */
     if (state.game.num_dots_eaten == NUM_DOTS) {
+        state.game.round++;
         state.game.num_dots_eaten = 0;
         game_init_playfield();
         state.game.global_dot_counter_active = false;

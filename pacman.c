@@ -186,7 +186,7 @@ typedef enum {
     FREEZETYPE_WON       = (1<<4),  // game round was won
 } freezetype_t;
 
-// a timer holds a specific game-tick when an action should be started
+// a trigger holds a specific game-tick when an action should be started
 typedef struct {
     uint32_t tick;
 } trigger_t;
@@ -251,7 +251,7 @@ static struct {
 
     struct {
         uint32_t tick;          // the central game tick, this drives the whole game
-        uint64_t laptime_store; // helper variable to mease frame duration
+        uint64_t laptime_store; // helper variable to measure frame duration
         int32_t tick_accum;     // helper variable to decouple ticks from frame rate
     } timing;
 

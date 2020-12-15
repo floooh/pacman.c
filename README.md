@@ -2,6 +2,8 @@
 
 A Pacman clone written in C99 with minimal dependencies for Windows, macOS and Linux.
 
+[WASM version](https://floooh.github.com/pacman.c/pacman.html)
+
 For implementation details see comments in the pacman.c source file (I've tried
 to structure the source code so that it can be read from top to bottom).
 

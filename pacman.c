@@ -60,16 +60,26 @@ enum {
     TILE_DOT            = 0x10,
     TILE_PILL           = 0x14,
     TILE_GHOST          = 0xB0,
-    TILE_LIFE           = 0x20,      // 0x20..0x23
-    TILE_CHERRIES       = 0x90,      // 0x90..0x93
-    TILE_STRAWBERRY     = 0x94,      // 0x94..0x97
-    TILE_PEACH          = 0x98,      // 0x98..0x9B
-    TILE_BELL           = 0x9C,      // 0x9C..0x9F
-    TILE_APPLE          = 0xA0,      // 0xA0..0xA3
-    TILE_GRAPES         = 0xA4,      // 0xA4..0xA7
-    TILE_GALAXIAN       = 0xA8,      // 0xA8..0xAB
-    TILE_KEY            = 0xAC,      // 0xAC..0xAF
-    TILE_DOOR           = 0xCF,      // the ghost-house door
+    TILE_LIFE           = 0x20, // 0x20..0x23
+    TILE_CHERRIES       = 0x90, // 0x90..0x93
+    TILE_STRAWBERRY     = 0x94, // 0x94..0x97
+    TILE_PEACH          = 0x98, // 0x98..0x9B
+    TILE_BELL           = 0x9C, // 0x9C..0x9F
+    TILE_APPLE          = 0xA0, // 0xA0..0xA3
+    TILE_GRAPES         = 0xA4, // 0xA4..0xA7
+    TILE_GALAXIAN       = 0xA8, // 0xA8..0xAB
+    TILE_KEY            = 0xAC, // 0xAC..0xAF
+    TILE_DOOR           = 0xCF, // the ghost-house door
+    TILE_SCORE_10x      = 0x81,
+    TILE_SCORE_30x      = 0x82,
+    TILE_SCORE_50x      = 0x83,
+    TILE_SCORE_70x      = 0x84,
+    TILE_SCORE_x0       = 0x85,
+    TILE_SCORE_10xx     = 0x86,
+    TILE_SCORE_20xx     = 0x88,
+    TILE_SCORE_30xx     = 0x8A,
+    TILE_SCORE_50xx     = 0x8C,
+    TILE_SCORE_xx00     = 0x8D,
 };
 
 // common sprite tile codes
@@ -112,7 +122,8 @@ enum {
     COLOR_GRAPES        = 0x17,
     COLOR_GALAXIAN      = 0x09,
     COLOR_KEY           = 0x16,
-    COLOR_WHITE_BORDER  = 0x1F
+    COLOR_WHITE_BORDER  = 0x1F,
+    COLOR_FRUIT_SCORE   = 0x03,
 };
 
 // the top-level game states (intro => game => intro)
@@ -273,6 +284,7 @@ static struct {
         trigger_t pill_eaten;           // last time Pacman ate a pill
         trigger_t ghost_eaten;          // last time Pacman ate a ghost
         trigger_t pacman_eaten;         // last time Pacman was eaten by a ghost
+        trigger_t fruit_eaten;          // last time Pacman has eaten the bonus fruit
         trigger_t force_leave_house;    // starts when a dot is eaten
         trigger_t fruit_active;         // starts when bonus fruit is shown
         uint8_t freeze;             // combination of FREEZETYPE_* flags
@@ -836,6 +848,24 @@ static void vid_draw_tile_quad(int2_t tile_pos, uint8_t color_code, uint8_t tile
     }
 }
 
+// draw the fruit bonus score tiles
+static void vid_fruit_score(fruit_t fruit_type) {
+    uint8_t t0, t1;
+    uint8_t color_code = COLOR_FRUIT_SCORE;
+    switch (fruit_type) {
+        case FRUIT_CHERRIES:    t0 = TILE_SCORE_10x; t1 = TILE_SCORE_x0; break;
+        case FRUIT_STRAWBERRY:  t0 = TILE_SCORE_30x; t1 = TILE_SCORE_x0; break;
+        case FRUIT_PEACH:       t0 = TILE_SCORE_50x; t1 = TILE_SCORE_x0; break;
+        case FRUIT_APPLE:       t0 = TILE_SCORE_70x; t1 = TILE_SCORE_x0; break;
+        case FRUIT_GRAPES:      t0 = TILE_SCORE_10xx; t1 = TILE_SCORE_xx00; break;
+        case FRUIT_GALAXIAN:    t0 = TILE_SCORE_20xx; t1 = TILE_SCORE_xx00; break;
+        case FRUIT_BELL:        t0 = TILE_SCORE_30xx; t1 = TILE_SCORE_xx00; break;
+        case FRUIT_KEY:         t0 = TILE_SCORE_50xx; t1 = TILE_SCORE_xx00; break;
+        default:                t0 = TILE_SPACE; t1 = TILE_SPACE; color_code = COLOR_DOT; break;
+    }
+    vid_color_tile(i2(13, 20), color_code, t0);
+    vid_color_tile(i2(14, 20), color_code, t1);
+}
 
 // disable and reset all sprites
 static void spr_clear(void) {
@@ -985,14 +1015,29 @@ static uint8_t tile_code_at(int2_t tile_pos) {
 // check if a tile position contains a blocking tile
 static bool is_blocking_tile(int2_t tile_pos) {
     const uint8_t tile_code = tile_code_at(tile_pos);
+    return (tile_code >= 0xC0);
+/*
+    if ((tile_code == TILE_DOT) ||
+        (tile_code == TILE_PILL) ||
+        (tile_code == TILE_SPACE) ||
+        ((tile_code >= TILE_SCORE_10x) && (tile_code <= TILE_SCORE_xx00)))
+    {
+        return false;
+    }
+    else {
+
+    }
+
     switch (tile_code) {
         case TILE_DOT:
         case TILE_PILL:
         case TILE_SPACE:
+        case TILE_
             return false;
         default:
             return true;
     }
+*/
 }
 
 // check if a tile position contains a dot tile
@@ -1151,6 +1196,7 @@ static void game_disable_timers(void) {
     disable(&state.game.pill_eaten);
     disable(&state.game.ghost_eaten);
     disable(&state.game.pacman_eaten);
+    disable(&state.game.fruit_eaten);
     disable(&state.game.force_leave_house);
 }
 
@@ -1311,11 +1357,17 @@ static void game_update_tiles(void) {
         }
     }
 
+    // clear the fruit-eaten score after a little while
+    if (after_once(state.game.fruit_eaten, 2*60)) {
+        vid_fruit_score(FRUIT_NONE);
+    }
+
     // lives at bottom left screen
     for (int i = 0; i < NUM_LIVES; i++) {
         uint8_t color = (i < state.game.num_lives) ? COLOR_PACMAN : 0;
         vid_draw_tile_quad(i2(2+2*i,34), color, TILE_LIFE);
     }
+
     // draw fruit table
     for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
         uint8_t tile_code = fruit_tiles_colors[state.game.eaten_fruits[i]][0];
@@ -1811,6 +1863,17 @@ static void game_update_actors(void) {
             state.game.num_ghosts_eaten = 0;
             for (int i = 0; i < NUM_GHOSTS; i++) {
                 start(&state.game.ghost[i].frightened);
+            }
+        }
+        // check if Pacman eats the bonus fruit
+        if (state.game.active_fruit != FRUIT_NONE) {
+            const int2_t test_pos = pixel_to_tile_pos(add_i2(actor->pos, i2(TILE_WIDTH/2, 0)));
+            if (equal_i2(test_pos, i2(14, 20))) {
+                start(&state.game.fruit_eaten);
+                uint32_t score = levelspec(state.game.round).bonus_score;
+                state.game.score += score;
+                vid_fruit_score(state.game.active_fruit);
+                state.game.active_fruit = FRUIT_NONE;
             }
         }
         // check if Pacman collides with any ghost

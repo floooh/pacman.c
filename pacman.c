@@ -10,12 +10,13 @@
 #include <string.h> // memset()
 #include <stdlib.h> // abs()
 
-#define DBG_SKIP_INTRO      (1)     // set to (1) to skip intro
-#define DBG_SKIP_PRELUDE    (1)     // set to (1) to skip game prelude
+#define DBG_SKIP_INTRO      (0)     // set to (1) to skip intro
+#define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
+#define DBG_START_ROUND     (0)     // set to any starting round <=255
 #define DBG_MARKERS         (0)     // set to (1) to show debug markers
-#define DBG_ESCAPE          (1)     // set to (1) to leave game loop with Esc
+#define DBG_ESCAPE          (0)     // set to (1) to leave game loop with Esc
 #define DBG_DOUBLE_SPEED    (0)     // set to (1) to speed up game (useful with godmode)
-#define DBG_GODMODE         (1)     // set to (1) to disable dying
+#define DBG_GODMODE         (0)     // set to (1) to disable dying
 
 // various constants
 enum {
@@ -70,16 +71,6 @@ enum {
     TILE_GALAXIAN       = 0xA8, // 0xA8..0xAB
     TILE_KEY            = 0xAC, // 0xAC..0xAF
     TILE_DOOR           = 0xCF, // the ghost-house door
-    TILE_SCORE_10x      = 0x81,
-    TILE_SCORE_30x      = 0x82,
-    TILE_SCORE_50x      = 0x83,
-    TILE_SCORE_70x      = 0x84,
-    TILE_SCORE_x0       = 0x85,
-    TILE_SCORE_10xx     = 0x86,
-    TILE_SCORE_20xx     = 0x88,
-    TILE_SCORE_30xx     = 0x8A,
-    TILE_SCORE_50xx     = 0x8C,
-    TILE_SCORE_xx00     = 0x8D,
 };
 
 // common sprite tile codes
@@ -298,7 +289,6 @@ static struct {
         ghost_t ghost[NUM_GHOSTS];
         pacman_t pacman;
         fruit_t active_fruit;
-        fruit_t eaten_fruits[NUM_STATUS_FRUITS];
     } game;
 
     // the current input state
@@ -378,7 +368,7 @@ static const int2_t ghost_house_target_pos[NUM_GHOSTS] = {
 };
 
 // fruit tiles, sprite tiles and colors
-uint8_t fruit_tiles_colors[NUM_FRUITS][3] = {
+static const uint8_t fruit_tiles_colors[NUM_FRUITS][3] = {
     { 0, 0, 0 },   // FRUIT_NONE
     { TILE_CHERRIES,    SPRITETILE_CHERRIES,    COLOR_CHERRIES },
     { TILE_STRAWBERRY,  SPRITETILE_STRAWBERRY,  COLOR_STRAWBERRY },
@@ -388,6 +378,19 @@ uint8_t fruit_tiles_colors[NUM_FRUITS][3] = {
     { TILE_GALAXIAN,    SPRITETILE_GALAXIAN,    COLOR_GALAXIAN },
     { TILE_BELL,        SPRITETILE_BELL,        COLOR_BELL },
     { TILE_KEY,         SPRITETILE_KEY,         COLOR_KEY }
+};
+
+// the tiles for displaying the bonus-fruit-score
+static const uint8_t fruit_score_tiles[NUM_FRUITS][4] = {
+    { 0x40, 0x40, 0x40, 0x40 }, // FRUIT_NONE
+    { 0x40, 0x81, 0x85, 0x40 }, // FRUIT_CHERRIES: 100
+    { 0x40, 0x82, 0x85, 0x40 }, // FRUIT_STRAWBERRY: 300
+    { 0x40, 0x83, 0x85, 0x40 }, // FRUIT_PEACH: 500
+    { 0x40, 0x84, 0x85, 0x40 }, // FRUIT_APPLE: 700
+    { 0x40, 0x86, 0x8D, 0x8E }, // FRUIT_GRAPES: 1000
+    { 0x87, 0x88, 0x8D, 0x8E }, // FRUIT_GALAXIAN: 2000
+    { 0x89, 0x8A, 0x8D, 0x8E }, // FRUIT_BELL: 3000
+    { 0x8B, 0x8C, 0x8D, 0x8E }, // FRUIT_KEY: 5000
 };
 
 // level specifications (see pacman_dossier.pdf)
@@ -563,7 +566,8 @@ static uint32_t xorshift32(void) {
 }
 
 // get level spec for a game round
-static levelspec_t levelspec(uint8_t round) {
+static levelspec_t levelspec(int round) {
+    assert(round >= 0);
     if (round >= MAX_LEVELSPEC) {
         round = MAX_LEVELSPEC-1;
     }
@@ -850,21 +854,11 @@ static void vid_draw_tile_quad(int2_t tile_pos, uint8_t color_code, uint8_t tile
 
 // draw the fruit bonus score tiles
 static void vid_fruit_score(fruit_t fruit_type) {
-    uint8_t t0, t1;
-    uint8_t color_code = COLOR_FRUIT_SCORE;
-    switch (fruit_type) {
-        case FRUIT_CHERRIES:    t0 = TILE_SCORE_10x; t1 = TILE_SCORE_x0; break;
-        case FRUIT_STRAWBERRY:  t0 = TILE_SCORE_30x; t1 = TILE_SCORE_x0; break;
-        case FRUIT_PEACH:       t0 = TILE_SCORE_50x; t1 = TILE_SCORE_x0; break;
-        case FRUIT_APPLE:       t0 = TILE_SCORE_70x; t1 = TILE_SCORE_x0; break;
-        case FRUIT_GRAPES:      t0 = TILE_SCORE_10xx; t1 = TILE_SCORE_xx00; break;
-        case FRUIT_GALAXIAN:    t0 = TILE_SCORE_20xx; t1 = TILE_SCORE_xx00; break;
-        case FRUIT_BELL:        t0 = TILE_SCORE_30xx; t1 = TILE_SCORE_xx00; break;
-        case FRUIT_KEY:         t0 = TILE_SCORE_50xx; t1 = TILE_SCORE_xx00; break;
-        default:                t0 = TILE_SPACE; t1 = TILE_SPACE; color_code = COLOR_DOT; break;
+    assert((fruit_type >= 0) && (fruit_type < NUM_FRUITS));
+    uint8_t color_code = (fruit_type == FRUIT_NONE) ? COLOR_DOT : COLOR_FRUIT_SCORE;
+    for (int i = 0; i < 4; i++) {
+        vid_color_tile(i2(12+i, 20), color_code, fruit_score_tiles[fruit_type][i]);
     }
-    vid_color_tile(i2(13, 20), color_code, t0);
-    vid_color_tile(i2(14, 20), color_code, t1);
 }
 
 // disable and reset all sprites
@@ -1016,28 +1010,6 @@ static uint8_t tile_code_at(int2_t tile_pos) {
 static bool is_blocking_tile(int2_t tile_pos) {
     const uint8_t tile_code = tile_code_at(tile_pos);
     return (tile_code >= 0xC0);
-/*
-    if ((tile_code == TILE_DOT) ||
-        (tile_code == TILE_PILL) ||
-        (tile_code == TILE_SPACE) ||
-        ((tile_code >= TILE_SCORE_10x) && (tile_code <= TILE_SCORE_xx00)))
-    {
-        return false;
-    }
-    else {
-
-    }
-
-    switch (tile_code) {
-        case TILE_DOT:
-        case TILE_PILL:
-        case TILE_SPACE:
-        case TILE_
-            return false;
-        default:
-            return true;
-    }
-*/
 }
 
 // check if a tile position contains a dot tile
@@ -1204,16 +1176,13 @@ static void game_disable_timers(void) {
 static void game_init(void) {
     input_enable();
     game_disable_timers();
-    state.game.round = 0;
+    state.game.round = DBG_START_ROUND;
     state.game.freeze = FREEZETYPE_PRELUDE;
     state.game.num_lives = NUM_LIVES;
     state.game.global_dot_counter_active = false;
     state.game.global_dot_counter = 0;
     state.game.num_dots_eaten = 0;
     state.game.score = 0;
-    for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
-        state.game.eaten_fruits[i] = (i==0) ? FRUIT_CHERRIES:FRUIT_NONE;
-    }
 
     // draw the playfield and PLAYER ONE READY! message
     vid_clear(TILE_SPACE, COLOR_DOT);
@@ -1368,11 +1337,18 @@ static void game_update_tiles(void) {
         vid_draw_tile_quad(i2(2+2*i,34), color, TILE_LIFE);
     }
 
-    // draw fruit table
-    for (int i = 0; i < NUM_STATUS_FRUITS; i++) {
-        uint8_t tile_code = fruit_tiles_colors[state.game.eaten_fruits[i]][0];
-        uint8_t color_code = fruit_tiles_colors[state.game.eaten_fruits[i]][2];
-        vid_draw_tile_quad(i2(24-2*i,34), color_code, tile_code);
+    // draw bonus fruit list in bottom-right corner
+    {
+        int16_t x = 24;
+        for (int i = ((int)state.game.round - NUM_STATUS_FRUITS + 1); i <= (int)state.game.round; i++) {
+            if (i >= 0) {
+                fruit_t fruit = levelspec(i).bonus_fruit;
+                uint8_t tile_code = fruit_tiles_colors[fruit][0];
+                uint8_t color_code = fruit_tiles_colors[fruit][2];
+                vid_draw_tile_quad(i2(x,34), color_code, tile_code);
+                x -= 2;
+            }
+        }
     }
 
     // if game round was won, render the entire playfield as blinking blue/white

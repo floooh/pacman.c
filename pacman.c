@@ -26,6 +26,7 @@ enum {
     #else
         TICK_DURATION   = 16666,
     #endif
+    TICK_TOLERANCE      = 1000,         // per-frame tolerance in microseconds
     DISABLED_TICKS      = 0xFFFFFFFF,   // magic tick value for a disabled timer
     TILE_WIDTH          = 8,
     TILE_HEIGHT         = 8,
@@ -492,7 +493,7 @@ static void frame(void) {
         frame_time_us = 33333;
     }
     state.timing.tick_accum += frame_time_us;
-    while (state.timing.tick_accum > 0) {
+    while (state.timing.tick_accum > -TICK_TOLERANCE) {
         state.timing.tick_accum -= TICK_DURATION;
         state.timing.tick++;
 

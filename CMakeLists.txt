@@ -20,8 +20,10 @@ set(SOKOL_HEADERS
     sokol/sokol_audio.h
     sokol/sokol_time.h
     sokol/sokol_glue.h)
+add_library(sokol STATIC sokol/sokol.c ${SOKOL_HEADERS})
 if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
-    add_library(sokol STATIC sokol/sokol.m ${SOKOL_HEADERS})
+    # compile sokol.c as Objective-C
+    target_compile_options(sokol PRIVATE -x objective-c)
     target_link_libraries(sokol
         "-framework QuartzCore"
         "-framework Cocoa"

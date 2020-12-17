@@ -486,10 +486,12 @@ static void input_enable(void);
 static void input_disable(void);
 
 static void gfx_init(void);
+static void gfx_shutdown(void);
 static void gfx_fade(void);
 static void gfx_draw(void);
 
 static void snd_init(void);
+static void snd_shutdown(void);
 static void snd_frame(void);
 static void snd_clear(void);
 static void snd_start(int sound_slot, const sound_t* snd);
@@ -515,13 +517,9 @@ sapp_desc sokol_main(int argc, char* argv[]) {
 }
 
 static void init(void) {
-    // setup sokol libs
-    sg_setup(&(sg_desc){
-        .context = sapp_sgcontext()
-    });
     stm_setup();
-    saudio_setup(&(saudio_desc){ 0 });
     gfx_init();
+    snd_init();
 
     // start into intro screen
     #if DBG_SKIP_INTRO
@@ -598,8 +596,8 @@ static void input(const sapp_event* ev) {
 }
 
 static void cleanup(void) {
-    sg_shutdown();
-    saudio_shutdown();
+    snd_shutdown();
+    gfx_shutdown();
 }
 
 /*== GRAB BAG OF HELPER FUNCTIONS ============================================*/
@@ -2555,8 +2553,16 @@ static void gfx_decode_color_palette(void) {
     }
 }
 
-// initialize the gfx subsystem
 static void gfx_init(void) {
+    sg_setup(&(sg_desc){
+        // reduce pool allocation size to what's actually needed
+        .buffer_pool_size = 2,
+        .image_pool_size = 3,
+        .shader_pool_size = 2,
+        .pipeline_pool_size = 2,
+        .pass_pool_size = 1,
+        .context = sapp_sgcontext()
+    });
     disable(&state.gfx.fadein);
     disable(&state.gfx.fadeout);
     state.gfx.fade = 0xFF;
@@ -2564,6 +2570,10 @@ static void gfx_init(void) {
     gfx_decode_tiles();
     gfx_decode_color_palette(); 
     gfx_create_resources();
+}
+
+static void gfx_shutdown(void) {
+    sg_shutdown();
 }
 
 static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code, uint8_t fade) {
@@ -2762,6 +2772,15 @@ static void gfx_draw(void) {
     sg_draw(0, 4, 1);
     sg_end_pass();
     sg_commit();
+}
+
+/*== AUDIO SUBSYSTEM =========================================================*/
+static void snd_init(void) {
+    saudio_setup(&(saudio_desc){ 0 });
+}
+
+static void snd_shutdown(void) {
+    saudio_shutdown();
 }
 
 /*== EMBEDDED DATA ===========================================================*/

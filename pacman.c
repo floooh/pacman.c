@@ -22,11 +22,11 @@
 enum {
     // tick duration in microseconds
     #if DBG_DOUBLE_SPEED
-        TICK_DURATION   = 8333,
+        TICK_DURATION_NS = 8333333,
     #else
-        TICK_DURATION   = 16666,
+        TICK_DURATION_NS = 16666666,
     #endif
-    TICK_TOLERANCE      = 1000,         // per-frame tolerance in microseconds
+    TICK_TOLERANCE_NS   = 1000000,      // per-frame tolerance in microseconds
     NUM_VOICES          = 3,            // number of sound voices
     NUM_SOUNDS          = 3,            // max number of sounds that can be active
     NUM_SAMPLES         = 128,          // max number of samples in sample buffer
@@ -248,6 +248,14 @@ typedef struct {
     int2_t tile_pos;
 } debugmarker_t;
 
+// a sound effect description used as param for snd_start()
+typedef struct {
+    const uint32_t* ptr;    // pointer to register dump data
+    uint32_t size;          // byte size of register dump data
+    bool voice[3];          // true to activate voice
+    bool looping;           // true to play looping
+} sound_desc_t;
+
 // a sound voice/channel
 typedef struct {
     uint32_t counter;   // 20-bit counter, top 5 bits are index into wavetable ROM
@@ -258,28 +266,23 @@ typedef struct {
     float sample_div;   // current float sample divisor
 } voice_t;
 
-/* A sound effect is a 60 Hz 'register dump' of frequency/waveform/volume tuples
+// flags for sound_t.flags
+typedef enum {
+    SOUNDFLAG_VOICE0 = (1<<0),
+    SOUNDFLAG_VOICE1 = (1<<1),
+    SOUNDFLAG_VOICE2 = (1<<2),
+    SOUNDFLAG_LOOPING = (1<<3),
 
-    Each frequency/waveform/volume tuple is encoded in a single 32-bit value:
+    SOUNDFLAG_ALL_VOICES = (1<<0)|(1<<1)|(1<<2)
+} soundflag_t;
 
-    - bits 0..19:   20-bit frequency
-    - bits 24..27:  3-bit waveform index
-    - bits 28..31:  4-bit volume
-
-    3 such values are required
-*/
-enum {
-    SOUNDFLAG_VOICE_0 = (1<<0),
-    SOUNDFLAG_VOICE_1 = (1<<1),
-    SOUNDFLAG_VOICE_2 = (1<<2),
-    SOUNDFLAG_LOOP    = (1<<3),
-};
-
+// a currently playing sound effect
 typedef struct {
-    uint32_t num_ticks;     // length of sound effect in 60Hz ticks
-    const uint32_t* values; // 3 * num_ticks register dump values
-    uint8_t flags;          // combination of SOUNDFLAG_xxx values
     uint32_t cur_tick;      // current tick counter
+    uint32_t num_ticks;     // length of sound effect in 60Hz ticks
+    uint32_t stride;        // number of uint32_t values per tick
+    const uint32_t* data;   // 3 * num_ticks register dump values
+    uint8_t flags;          // combination of soundflag_t
 } sound_t;
 
 // all state is in a single nested struct
@@ -343,12 +346,14 @@ static struct {
     // the audio subsystem is essentially a Namco arcade board sound emulator
     struct {
         voice_t voice[NUM_VOICES];
-        sound_t sounds[NUM_SOUNDS];
-        double voice_ticks_per_sample;
-        double sample_duration;
+        sound_t sound[NUM_SOUNDS];
+        int32_t voice_tick_accum;
+        int32_t voice_tick_period;
+        int32_t sample_duration_ns;
+        int32_t sample_accum;
         uint32_t num_samples;
         float sample_buffer[NUM_SAMPLES];
-    } sound;
+    } audio;
 
     // the gfx subsystem implements a simple tile+sprite renderer
     struct {
@@ -499,9 +504,10 @@ static void gfx_draw(void);
 
 static void snd_init(void);
 static void snd_shutdown(void);
-static void snd_frame(int32_t frame_time_ns);
+static void snd_tick(void); // called per game tick
+static void snd_frame(int32_t frame_time_ns);   // called per frame
 static void snd_clear(void);
-static void snd_start(int sound_slot, const sound_t* snd);
+static void snd_start(int sound_slot, const sound_desc_t* snd);
 static void snd_stop(int sound_slot);
 
 static const uint8_t rom_tiles[4096];
@@ -509,6 +515,8 @@ static const uint8_t rom_sprites[4096];
 static const uint8_t rom_hwcolors[32];
 static const uint8_t rom_palette[256];
 static const uint8_t rom_wavetable[256];
+
+static const uint32_t snd_prelude[490];
 
 /*== APPLICATION ENTRY AND CALLBACKS =========================================*/
 sapp_desc sokol_main(int argc, char* argv[]) {
@@ -539,15 +547,18 @@ static void init(void) {
 static void frame(void) {
 
     // run the game at a fixed tick rate regardless of frame rate
-    uint32_t frame_time_us = (uint32_t) stm_us(stm_laptime(&state.timing.laptime_store));
+    uint32_t frame_time_ns = (uint32_t) stm_ns(stm_laptime(&state.timing.laptime_store));
     // clamp max frame time (so the timing isn't messed up when stopping in the debugger)
-    if (frame_time_us > 33333) {
-        frame_time_us = 33333;
+    if (frame_time_ns > 33333333) {
+        frame_time_ns = 33333333;
     }
-    state.timing.tick_accum += frame_time_us;
-    while (state.timing.tick_accum > -TICK_TOLERANCE) {
-        state.timing.tick_accum -= TICK_DURATION;
+    state.timing.tick_accum += frame_time_ns;
+    while (state.timing.tick_accum > -TICK_TOLERANCE_NS) {
+        state.timing.tick_accum -= TICK_DURATION_NS;
         state.timing.tick++;
+
+        // call per-tick sound function (updates sound 'registers' with current sound effect values)
+        snd_tick();
 
         // check for game state change
         if (now(state.intro.started)) {
@@ -568,7 +579,7 @@ static void frame(void) {
         }
     }
     gfx_draw();
-    snd_frame(frame_time_us);
+    snd_frame(frame_time_ns);
 }
 
 static void input(const sapp_event* ev) {
@@ -1970,6 +1981,11 @@ static void game_tick(void) {
         start(&state.gfx.fadein);
         start(&state.game.prelude_started);
         start_after(&state.game.ready_started, 3*prelude_ticks_per_sec);
+        snd_start(0, &(sound_desc_t){
+            .ptr = snd_prelude,
+            .size = sizeof(snd_prelude),
+            .voice = { true, true, false }
+        });
         game_init();
     }
     // initialize new round (each time Pacman looses a life), make actors visible, remove "PLAYER ONE", start a new life
@@ -2786,9 +2802,14 @@ static void gfx_draw(void) {
 static void snd_init(void) {
     saudio_setup(&(saudio_desc){ 0 });
 
-    // compute duration of a sample in nanoseconds
-    //int samples_per_sec = saudio_sample_rate();
-    //state.sound.sample_duration_sec = 1.0 / samples_per_sec;
+    // compute sample duration in nanoseconds
+    int32_t samples_per_sec = saudio_sample_rate();
+    state.audio.sample_duration_ns = 1000000000 / samples_per_sec;
+
+    /* compute number of 96kHz ticks per sample tick (the Namco sound generator
+        runs at 96kHz), times 1000 for increased precision
+    */
+    state.audio.voice_tick_period = 96000000 / samples_per_sec;
 }
 
 static void snd_shutdown(void) {
@@ -2798,7 +2819,7 @@ static void snd_shutdown(void) {
 // the snd_voice_tick() updates the Namco sound generator and must be called with 96 kHz
 static void snd_voice_tick(void) {
     for (int i = 0; i < NUM_VOICES; i++) {
-        voice_t* voice = &state.sound.voice[i];
+        voice_t* voice = &state.audio.voice[i];
         voice->counter += voice->frequency;
         /* lookup current 4-bit sample from the waveform number and the
             topmost 5 bits of the 20-bit sample counter
@@ -2814,44 +2835,123 @@ static void snd_voice_tick(void) {
 static void snd_sample_tick(void) {
     float sm = 0.0f;
     for (int i = 0; i < NUM_VOICES; i++) {
-        voice_t* voice = &state.sound.voice[i];
+        voice_t* voice = &state.audio.voice[i];
         if (voice->sample_div > 0.0f) {
             sm += voice->sample_acc / voice->sample_div;
             voice->sample_acc = voice->sample_div = 0.0f;
         }
     }
     sm *= 0.333333f;
-    state.sound.sample_buffer[state.sound.num_samples++] = sm;
-    if (state.sound.num_samples == NUM_SAMPLES) {
-        saudio_push(state.sound.sample_buffer, state.sound.num_samples);
-        state.sound.num_samples = 0;
+    state.audio.sample_buffer[state.audio.num_samples++] = sm;
+    if (state.audio.num_samples == NUM_SAMPLES) {
+        saudio_push(state.audio.sample_buffer, state.audio.num_samples);
+        state.audio.num_samples = 0;
     }
 }
 
-// the sound subsystem per-frame function
-static void snd_frame(int32_t frame_time_us) {
-    // tick the voice generator hardware at 96kHz (same as the Namco sound hardware)
-/*
-    state.sound.voice_tick_accum -= frame_time_ns;
-    while (state.sound.voice_tick_accum < 0) {
-        state.sound.voice_tick_accum += VOICE_TICK_DURATION_NS;
-        snd_voice_tick();
-    }
-*/
-
-    // tick the sample generator at the sound playback sample rate
-/*
-    state.sound.sample_tick_accum -= frame_time_ns;
-    while (state.sound.sample_tick_accum < 0) {
-        state.sound.voice_tick_accum -= state.sound.voice_tick_period;
-        while (state.sound.voice_tick_accum < 0) {
-
+// the sound subsystem's per-frame function
+static void snd_frame(int32_t frame_time_ns) {
+    // for each sample to generate...
+    state.audio.sample_accum -= frame_time_ns;
+    while (state.audio.sample_accum < 0) {
+        state.audio.sample_accum += state.audio.sample_duration_ns;
+        // tick the sound generator at 96 KHz
+        state.audio.voice_tick_accum -= state.audio.voice_tick_period;
+        while (state.audio.voice_tick_accum < 0) {
+            state.audio.voice_tick_accum += 1000;
             snd_voice_tick();
         }
-        state.sound.sample_tick_accum += state.sound.sample_tick_duration_ns;
+        // generate a new sample, and push out to sokol-audio when local sample buffer full
         snd_sample_tick();
     }
+}
+
+/* The sound system's 60 Hz tick function (called from game tick).
+    Updates the sound 'hardware registers' for all active sound effects.
 */
+static void snd_tick(void) {
+    // for each active sound effect...
+    for (int sound_slot = 0; sound_slot < NUM_SOUNDS; sound_slot++) {
+        sound_t* snd = &state.audio.sound[sound_slot];
+        if (snd->flags & SOUNDFLAG_ALL_VOICES) {
+            assert(snd->data);
+            // sound finished or looping?
+            if (snd->cur_tick == snd->num_ticks) {
+                if (snd->flags & SOUNDFLAG_LOOPING) {
+                    // looping, wrap around
+                    snd->cur_tick = 0;
+                }
+                else {
+                    // not looping, stop the sound
+                    snd_stop(sound_slot);
+                    continue;
+                }
+            }
+
+            // decode register dump values into voice 'registers'
+            const uint32_t* cur_ptr = &snd->data[snd->cur_tick * snd->stride];
+            for (int i = 0; i < NUM_VOICES; i++) {
+                if (snd->flags & (1<<i)) {
+                    voice_t* voice = &state.audio.voice[i];
+                    uint32_t val = *cur_ptr++;
+                    // 20 bits frequency
+                    voice->frequency = val & ((1<<20)-1);
+                    // 3 bits waveform
+                    voice->waveform = (val>>24) & 7;
+                    // 4 bits volume
+                    voice->volume = (val>>28) & 0xF;
+                }
+            }
+            snd->cur_tick++;
+        }
+    }
+}
+
+// clear all active sound effects and start outputting silence
+static void snd_clear(void) {
+    memset(&state.audio.voice, 0, sizeof(state.audio.voice));
+    memset(&state.audio.sound, 0, sizeof(state.audio.sound));
+}
+
+// start a sound effect
+static void snd_start(int slot, const sound_desc_t* desc) {
+    assert((slot >= 0) && (slot < NUM_SOUNDS));
+    assert(desc && desc->ptr);
+    assert((desc->size > 0) && ((desc->size & 3) == 0));
+    int num_voices = 0;
+    for (int i = 0; i < NUM_VOICES; i++) {
+        if (desc->voice[i]) {
+            num_voices++;
+        }
+    }
+    assert((desc->size % (num_voices*sizeof(uint32_t))) == 0);
+
+    sound_t* snd = &state.audio.sound[slot];
+    snd->cur_tick = 0;
+    snd->stride = num_voices;
+    snd->num_ticks = desc->size / (snd->stride*sizeof(uint32_t));
+    snd->data = desc->ptr;
+    snd->flags = desc->looping ? SOUNDFLAG_LOOPING : 0;
+    for (int i = 0; i < NUM_VOICES; i++) {
+        if (desc->voice[i]) {
+            snd->flags |= (1<<i);
+        }
+    }
+}
+
+// stop a sound effect
+static void snd_stop(int slot) {
+    assert((slot >= 0) && (slot < NUM_SOUNDS));
+
+    // silence the sound's output voices
+    for (int i = 0; i < NUM_VOICES; i++) {
+        if (state.audio.sound[slot].flags & (1<<i)) {
+            state.audio.voice[i] = (voice_t) { 0 };
+        }
+    }
+
+    // clear the sound slot
+    state.audio.sound[slot] = (sound_t) { 0 };
 }
 
 /*== EMBEDDED DATA ===========================================================*/
@@ -3417,4 +3517,265 @@ static const uint8_t rom_wavetable[256] = {
     0xf, 0xe, 0xd, 0xc, 0xb, 0xa, 0x9, 0x8, 0x7, 0x6, 0x5, 0x4, 0x3, 0x2, 0x1, 0x0,
     0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf,
     0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf,
+};
+
+/*== SOUND EFFECT REGISTER DUMPS =============================================*/
+
+/*
+    Each line is a 'register dump' for one 60Hz tick. Each 32-bit number
+    encodes the per-voice values for frequency, waveform and volume:
+
+    31                              0 bit
+    |vvvv-www----ffffffffffffffffffff|
+      |    |              |
+      |    |              +-- 20 bits frequency
+      |    +-- 3 bits waveform
+      +-- 4 bits volume
+*/
+static const uint32_t snd_prelude[490] = {
+    0xE20002E0, 0xF0001700,
+    0xD20002E0, 0xF0001700,
+    0xC20002E0, 0xF0001700,
+    0xB20002E0, 0xF0001700,
+    0xA20002E0, 0xF0000000,
+    0x920002E0, 0xF0000000,
+    0x820002E0, 0xF0000000,
+    0x720002E0, 0xF0000000,
+    0x620002E0, 0xF0002E00,
+    0x520002E0, 0xF0002E00,
+    0x420002E0, 0xF0002E00,
+    0x320002E0, 0xF0002E00,
+    0x220002E0, 0xF0000000,
+    0x120002E0, 0xF0000000,
+    0x020002E0, 0xF0000000,
+    0xE2000000, 0xF0002280,
+    0xD2000000, 0xF0002280,
+    0xC2000000, 0xF0002280,
+    0xB2000000, 0xF0002280,
+    0xA2000000, 0xF0000000,
+    0x92000000, 0xF0000000,
+    0x82000000, 0xF0000000,
+    0x72000000, 0xF0000000,
+    0xE2000450, 0xF0001D00,
+    0xD2000450, 0xF0001D00,
+    0xC2000450, 0xF0001D00,
+    0xB2000450, 0xF0001D00,
+    0xA2000450, 0xF0000000,
+    0x92000450, 0xF0000000,
+    0x82000450, 0xF0000000,
+    0x72000450, 0xF0000000,
+    0xE20002E0, 0xF0002E00,
+    0xD20002E0, 0xF0002E00,
+    0xC20002E0, 0xF0002E00,
+    0xB20002E0, 0xF0002E00,
+    0xA20002E0, 0xF0002280,
+    0x920002E0, 0xF0002280,
+    0x820002E0, 0xF0002280,
+    0x720002E0, 0xF0002280,
+    0x620002E0, 0xF0000000,
+    0x520002E0, 0xF0000000,
+    0x420002E0, 0xF0000000,
+    0x320002E0, 0xF0000000,
+    0x220002E0, 0xF0000000,
+    0x120002E0, 0xF0000000,
+    0x020002E0, 0xF0000000,
+    0xE2000000, 0xF0001D00,
+    0xD2000000, 0xF0001D00,
+    0xC2000000, 0xF0001D00,
+    0xB2000000, 0xF0001D00,
+    0xA2000000, 0xF0001D00,
+    0x92000000, 0xF0001D00,
+    0x82000000, 0xF0001D00,
+    0x72000000, 0xF0001D00,
+    0xE2000450, 0xF0000000,
+    0xD2000450, 0xF0000000,
+    0xC2000450, 0xF0000000,
+    0xB2000450, 0xF0000000,
+    0xA2000450, 0xF0000000,
+    0x92000450, 0xF0000000,
+    0x82000450, 0xF0000000,
+    0x72000450, 0xF0000000,
+    0xE2000308, 0xF0001840,
+    0xD2000308, 0xF0001840,
+    0xC2000308, 0xF0001840,
+    0xB2000308, 0xF0001840,
+    0xA2000308, 0xF0000000,
+    0x92000308, 0xF0000000,
+    0x82000308, 0xF0000000,
+    0x72000308, 0xF0000000,
+    0x62000308, 0xF00030C0,
+    0x52000308, 0xF00030C0,
+    0x42000308, 0xF00030C0,
+    0x32000308, 0xF00030C0,
+    0x22000308, 0xF0000000,
+    0x12000308, 0xF0000000,
+    0x02000308, 0xF0000000,
+    0xE2000000, 0xF0002480,
+    0xD2000000, 0xF0002480,
+    0xC2000000, 0xF0002480,
+    0xB2000000, 0xF0002480,
+    0xA2000000, 0xF0000000,
+    0x92000000, 0xF0000000,
+    0x82000000, 0xF0000000,
+    0x72000000, 0xF0000000,
+    0xE2000490, 0xF0001EC0,
+    0xD2000490, 0xF0001EC0,
+    0xC2000490, 0xF0001EC0,
+    0xB2000490, 0xF0001EC0,
+    0xA2000490, 0xF0000000,
+    0x92000490, 0xF0000000,
+    0x82000490, 0xF0000000,
+    0x72000490, 0xF0000000,
+    0xE2000308, 0xF00030C0,
+    0xD2000308, 0xF00030C0,
+    0xC2000308, 0xF00030C0,
+    0xB2000308, 0xF00030C0,
+    0xA2000308, 0xF0002480,
+    0x92000308, 0xF0002480,
+    0x82000308, 0xF0002480,
+    0x72000308, 0xF0002480,
+    0x62000308, 0xF0000000,
+    0x52000308, 0xF0000000,
+    0x42000308, 0xF0000000,
+    0x32000308, 0xF0000000,
+    0x22000308, 0xF0000000,
+    0x12000308, 0xF0000000,
+    0x02000308, 0xF0000000,
+    0xE2000000, 0xF0001EC0,
+    0xD2000000, 0xF0001EC0,
+    0xC2000000, 0xF0001EC0,
+    0xB2000000, 0xF0001EC0,
+    0xA2000000, 0xF0001EC0,
+    0x92000000, 0xF0001EC0,
+    0x82000000, 0xF0001EC0,
+    0x72000000, 0xF0001EC0,
+    0xE2000490, 0xF0000000,
+    0xD2000490, 0xF0000000,
+    0xC2000490, 0xF0000000,
+    0xB2000490, 0xF0000000,
+    0xA2000490, 0xF0000000,
+    0x92000490, 0xF0000000,
+    0x82000490, 0xF0000000,
+    0x72000490, 0xF0000000,
+    0xE20002E0, 0xF0001700,
+    0xD20002E0, 0xF0001700,
+    0xC20002E0, 0xF0001700,
+    0xB20002E0, 0xF0001700,
+    0xA20002E0, 0xF0000000,
+    0x920002E0, 0xF0000000,
+    0x820002E0, 0xF0000000,
+    0x720002E0, 0xF0000000,
+    0x620002E0, 0xF0002E00,
+    0x520002E0, 0xF0002E00,
+    0x420002E0, 0xF0002E00,
+    0x320002E0, 0xF0002E00,
+    0x220002E0, 0xF0000000,
+    0x120002E0, 0xF0000000,
+    0x020002E0, 0xF0000000,
+    0xE2000000, 0xF0002280,
+    0xD2000000, 0xF0002280,
+    0xC2000000, 0xF0002280,
+    0xB2000000, 0xF0002280,
+    0xA2000000, 0xF0000000,
+    0x92000000, 0xF0000000,
+    0x82000000, 0xF0000000,
+    0x72000000, 0xF0000000,
+    0xE2000450, 0xF0001D00,
+    0xD2000450, 0xF0001D00,
+    0xC2000450, 0xF0001D00,
+    0xB2000450, 0xF0001D00,
+    0xA2000450, 0xF0000000,
+    0x92000450, 0xF0000000,
+    0x82000450, 0xF0000000,
+    0x72000450, 0xF0000000,
+    0xE20002E0, 0xF0002E00,
+    0xD20002E0, 0xF0002E00,
+    0xC20002E0, 0xF0002E00,
+    0xB20002E0, 0xF0002E00,
+    0xA20002E0, 0xF0002280,
+    0x920002E0, 0xF0002280,
+    0x820002E0, 0xF0002280,
+    0x720002E0, 0xF0002280,
+    0x620002E0, 0xF0000000,
+    0x520002E0, 0xF0000000,
+    0x420002E0, 0xF0000000,
+    0x320002E0, 0xF0000000,
+    0x220002E0, 0xF0000000,
+    0x120002E0, 0xF0000000,
+    0x020002E0, 0xF0000000,
+    0xE2000000, 0xF0001D00,
+    0xD2000000, 0xF0001D00,
+    0xC2000000, 0xF0001D00,
+    0xB2000000, 0xF0001D00,
+    0xA2000000, 0xF0001D00,
+    0x92000000, 0xF0001D00,
+    0x82000000, 0xF0001D00,
+    0x72000000, 0xF0001D00,
+    0xE2000450, 0xF0000000,
+    0xD2000450, 0xF0000000,
+    0xC2000450, 0xF0000000,
+    0xB2000450, 0xF0000000,
+    0xA2000450, 0xF0000000,
+    0x92000450, 0xF0000000,
+    0x82000450, 0xF0000000,
+    0x72000450, 0xF0000000,
+    0xE2000450, 0xF0001B40,
+    0xD2000450, 0xF0001B40,
+    0xC2000450, 0xF0001B40,
+    0xB2000450, 0xF0001B40,
+    0xA2000450, 0xF0001D00,
+    0x92000450, 0xF0001D00,
+    0x82000450, 0xF0001D00,
+    0x72000450, 0xF0001D00,
+    0x62000450, 0xF0001EC0,
+    0x52000450, 0xF0001EC0,
+    0x42000450, 0xF0001EC0,
+    0x32000450, 0xF0001EC0,
+    0x22000450, 0xF0000000,
+    0x12000450, 0xF0000000,
+    0x02000450, 0xF0000000,
+    0xE20004D0, 0xF0001EC0,
+    0xD20004D0, 0xF0001EC0,
+    0xC20004D0, 0xF0001EC0,
+    0xB20004D0, 0xF0001EC0,
+    0xA20004D0, 0xF0002080,
+    0x920004D0, 0xF0002080,
+    0x820004D0, 0xF0002080,
+    0x720004D0, 0xF0002080,
+    0x620004D0, 0xF0002280,
+    0x520004D0, 0xF0002280,
+    0x420004D0, 0xF0002280,
+    0x320004D0, 0xF0002280,
+    0x220004D0, 0xF0000000,
+    0x120004D0, 0xF0000000,
+    0x020004D0, 0xF0000000,
+    0xE2000568, 0xF0002280,
+    0xD2000568, 0xF0002280,
+    0xC2000568, 0xF0002280,
+    0xB2000568, 0xF0002280,
+    0xA2000568, 0xF0002480,
+    0x92000568, 0xF0002480,
+    0x82000568, 0xF0002480,
+    0x72000568, 0xF0002480,
+    0x62000568, 0xF0002680,
+    0x52000568, 0xF0002680,
+    0x42000568, 0xF0002680,
+    0x32000568, 0xF0002680,
+    0x22000568, 0xF0000000,
+    0x12000568, 0xF0000000,
+    0x02000568, 0xF0000000,
+    0xE20005C0, 0xF0002E00,
+    0xD20005C0, 0xF0002E00,
+    0xC20005C0, 0xF0002E00,
+    0xB20005C0, 0xF0002E00,
+    0xA20005C0, 0xF0002E00,
+    0x920005C0, 0xF0002E00,
+    0x820005C0, 0xF0002E00,
+    0x720005C0, 0xF0002E00,
+    0x620005C0, 0x00000E80,
+    0x520005C0, 0x00000E80,
+    0x420005C0, 0x00000E80,
+    0x320005C0, 0x00000E80,
+    0x220005C0, 0x00000E80,
+    0x120005C0, 0x00000E80,
 };

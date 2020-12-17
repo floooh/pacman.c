@@ -29,6 +29,7 @@ enum {
     TICK_TOLERANCE      = 1000,         // per-frame tolerance in microseconds
     NUM_VOICES          = 3,            // number of sound voices
     NUM_SOUNDS          = 3,            // max number of sounds that can be active
+    NUM_SAMPLES         = 128,          // max number of samples in sample buffer
     DISABLED_TICKS      = 0xFFFFFFFF,   // magic tick value for a disabled timer
     TILE_WIDTH          = 8,
     TILE_HEIGHT         = 8,
@@ -253,6 +254,8 @@ typedef struct {
     uint32_t frequency; // 20-bit frequency
     uint8_t waveform;   // 3-bit waveform index
     uint8_t volume;     // 4-bit volume
+    float sample_acc;   // current float sample accumulator
+    float sample_div;   // current float sample divisor
 } voice_t;
 
 /* A sound effect is a 60 Hz 'register dump' of frequency/waveform/volume tuples
@@ -341,6 +344,10 @@ static struct {
     struct {
         voice_t voice[NUM_VOICES];
         sound_t sounds[NUM_SOUNDS];
+        double voice_ticks_per_sample;
+        double sample_duration;
+        uint32_t num_samples;
+        float sample_buffer[NUM_SAMPLES];
     } sound;
 
     // the gfx subsystem implements a simple tile+sprite renderer
@@ -492,7 +499,7 @@ static void gfx_draw(void);
 
 static void snd_init(void);
 static void snd_shutdown(void);
-static void snd_frame(void);
+static void snd_frame(int32_t frame_time_ns);
 static void snd_clear(void);
 static void snd_start(int sound_slot, const sound_t* snd);
 static void snd_stop(int sound_slot);
@@ -561,6 +568,7 @@ static void frame(void) {
         }
     }
     gfx_draw();
+    snd_frame(frame_time_us);
 }
 
 static void input(const sapp_event* ev) {
@@ -2777,10 +2785,73 @@ static void gfx_draw(void) {
 /*== AUDIO SUBSYSTEM =========================================================*/
 static void snd_init(void) {
     saudio_setup(&(saudio_desc){ 0 });
+
+    // compute duration of a sample in nanoseconds
+    //int samples_per_sec = saudio_sample_rate();
+    //state.sound.sample_duration_sec = 1.0 / samples_per_sec;
 }
 
 static void snd_shutdown(void) {
     saudio_shutdown();
+}
+
+// the snd_voice_tick() updates the Namco sound generator and must be called with 96 kHz
+static void snd_voice_tick(void) {
+    for (int i = 0; i < NUM_VOICES; i++) {
+        voice_t* voice = &state.sound.voice[i];
+        voice->counter += voice->frequency;
+        /* lookup current 4-bit sample from the waveform number and the
+            topmost 5 bits of the 20-bit sample counter
+        */
+        uint32_t wave_index = ((voice->waveform<<5) | ((voice->counter>>15) & 0x1F)) & 0xFF;
+        int sample = (((int)(rom_wavetable[wave_index] & 0xF)) - 8) * voice->volume;
+        voice->sample_acc += (float)sample; // sample is (-8..+7 wavetable value) * 16 (volume)
+        voice->sample_div += 128.0f;
+    }
+}
+
+// the snd_mixer_tick() function must be called at sample frequency (e.g. 44.1kHz)
+static void snd_sample_tick(void) {
+    float sm = 0.0f;
+    for (int i = 0; i < NUM_VOICES; i++) {
+        voice_t* voice = &state.sound.voice[i];
+        if (voice->sample_div > 0.0f) {
+            sm += voice->sample_acc / voice->sample_div;
+            voice->sample_acc = voice->sample_div = 0.0f;
+        }
+    }
+    sm *= 0.333333f;
+    state.sound.sample_buffer[state.sound.num_samples++] = sm;
+    if (state.sound.num_samples == NUM_SAMPLES) {
+        saudio_push(state.sound.sample_buffer, state.sound.num_samples);
+        state.sound.num_samples = 0;
+    }
+}
+
+// the sound subsystem per-frame function
+static void snd_frame(int32_t frame_time_us) {
+    // tick the voice generator hardware at 96kHz (same as the Namco sound hardware)
+/*
+    state.sound.voice_tick_accum -= frame_time_ns;
+    while (state.sound.voice_tick_accum < 0) {
+        state.sound.voice_tick_accum += VOICE_TICK_DURATION_NS;
+        snd_voice_tick();
+    }
+*/
+
+    // tick the sample generator at the sound playback sample rate
+/*
+    state.sound.sample_tick_accum -= frame_time_ns;
+    while (state.sound.sample_tick_accum < 0) {
+        state.sound.voice_tick_accum -= state.sound.voice_tick_period;
+        while (state.sound.voice_tick_accum < 0) {
+
+            snd_voice_tick();
+        }
+        state.sound.sample_tick_accum += state.sound.sample_tick_duration_ns;
+        snd_sample_tick();
+    }
+*/
 }
 
 /*== EMBEDDED DATA ===========================================================*/

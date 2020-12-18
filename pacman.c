@@ -2816,7 +2816,7 @@ static void snd_shutdown(void) {
     saudio_shutdown();
 }
 
-// the snd_voice_tick() updates the Namco sound generator and must be called with 96 kHz
+// the snd_voice_tick() function updates the Namco sound generator and must be called with 96 kHz
 static void snd_voice_tick(void) {
     for (int i = 0; i < NUM_VOICES; i++) {
         voice_t* voice = &state.audio.voice[i];
@@ -2831,7 +2831,7 @@ static void snd_voice_tick(void) {
     }
 }
 
-// the snd_mixer_tick() function must be called at sample frequency (e.g. 44.1kHz)
+// the snd_sample_tick() function must be called with sample frequency (e.g. 44.1kHz)
 static void snd_sample_tick(void) {
     float sm = 0.0f;
     for (int i = 0; i < NUM_VOICES; i++) {

@@ -481,6 +481,44 @@ static const levelspec_t levelspec_table[MAX_LEVELSPEC] = {
     // from here on repeating
 };
 
+// forward-declared sound-effect register dumps (recorded from Pacman arcade emulator)
+static const uint32_t snd_dump_prelude[490];
+static const uint32_t snd_dump_eatdot1[5];
+static const uint32_t snd_dump_eatdot2[5];
+static const uint32_t snd_dump_eatghost[31];
+static const uint32_t snd_dump_eatfruit[23];
+
+// sound effect description structs
+static const sound_desc_t snd_prelude = {
+    .ptr = snd_dump_prelude,
+    .size = sizeof(snd_dump_prelude),
+    .voice = { true, true, false }
+};
+
+static const sound_desc_t snd_eatdot1 = {
+    .ptr = snd_dump_eatdot1,
+    .size = sizeof(snd_dump_eatdot1),
+    .voice = { false, false, true }
+};
+
+static const sound_desc_t snd_eatdot2 = {
+    .ptr = snd_dump_eatdot2,
+    .size = sizeof(snd_dump_eatdot2),
+    .voice = { false, false, true }
+};
+
+static const sound_desc_t snd_eatghost = {
+    .ptr = snd_dump_eatghost,
+    .size = sizeof(snd_dump_eatghost),
+    .voice = { false, false, true }
+};
+
+static const sound_desc_t snd_eatfruit = {
+    .ptr = snd_dump_eatfruit,
+    .size = sizeof(snd_dump_eatfruit),
+    .voice = { false, false, true }
+};
+
 // forward declarations
 static void init(void);
 static void frame(void);
@@ -510,13 +548,12 @@ static void snd_clear(void);
 static void snd_start(int sound_slot, const sound_desc_t* snd);
 static void snd_stop(int sound_slot);
 
+// forward-declared ROM dumps
 static const uint8_t rom_tiles[4096];
 static const uint8_t rom_sprites[4096];
 static const uint8_t rom_hwcolors[32];
 static const uint8_t rom_palette[256];
 static const uint8_t rom_wavetable[256];
-
-static const uint32_t snd_prelude[490];
 
 /*== APPLICATION ENTRY AND CALLBACKS =========================================*/
 sapp_desc sokol_main(int argc, char* argv[]) {
@@ -1856,7 +1893,8 @@ static void game_update_ghosthouse_dot_counters(void) {
 }
 
 /* called when a dot or pill has been eaten, checks if a round has been won
-    (all dots and pills eaten), and whether to show the bonus fruit
+    (all dots and pills eaten), whether to show the bonus fruit, and finally
+    plays the dot-eaten sound effect
 */
 static void game_update_dots_eaten(void) {
     state.game.num_dots_eaten++;
@@ -1867,6 +1905,12 @@ static void game_update_dots_eaten(void) {
     else if ((state.game.num_dots_eaten == 70) || (state.game.num_dots_eaten == 170)) {
         // at 70 and 170 dots, show the bonus fruit
         start(&state.game.fruit_active);
+    }
+    if (state.game.num_dots_eaten & 1) {
+        snd_start(2, &snd_eatdot1);
+    }
+    else {
+        snd_start(2, &snd_eatdot2);
     }
 }
 
@@ -1915,6 +1959,7 @@ static void game_update_actors(void) {
                 state.game.score += score;
                 vid_fruit_score(state.game.active_fruit);
                 state.game.active_fruit = FRUIT_NONE;
+                snd_start(2, &snd_eatfruit);
             }
         }
         // check if Pacman collides with any ghost
@@ -1930,6 +1975,7 @@ static void game_update_actors(void) {
                     // increase score by 20, 40, 80, 160
                     state.game.score += 10 * (1<<state.game.num_ghosts_eaten);
                     state.game.freeze |= FREEZETYPE_EAT_GHOST;
+                    snd_start(2, &snd_eatghost);
                 }
                 else if ((ghost->state == GHOSTSTATE_CHASE) || (ghost->state == GHOSTSTATE_SCATTER)) {
                     // Pacman dies
@@ -1980,12 +2026,8 @@ static void game_tick(void) {
     if (now(state.game.started)) {
         start(&state.gfx.fadein);
         start(&state.game.prelude_started);
-        start_after(&state.game.ready_started, 3*prelude_ticks_per_sec);
-        snd_start(0, &(sound_desc_t){
-            .ptr = snd_prelude,
-            .size = sizeof(snd_prelude),
-            .voice = { true, true, false }
-        });
+        start_after(&state.game.ready_started, 2*prelude_ticks_per_sec);
+        snd_start(0, &snd_prelude);
         game_init();
     }
     // initialize new round (each time Pacman looses a life), make actors visible, remove "PLAYER ONE", start a new life
@@ -3532,7 +3574,7 @@ static const uint8_t rom_wavetable[256] = {
       |    +-- 3 bits waveform
       +-- 4 bits volume
 */
-static const uint32_t snd_prelude[490] = {
+static const uint32_t snd_dump_prelude[490] = {
     0xE20002E0, 0xF0001700,
     0xD20002E0, 0xF0001700,
     0xC20002E0, 0xF0001700,
@@ -3779,3 +3821,80 @@ static const uint32_t snd_prelude[490] = {
     0x220005C0, 0x00000E80,
     0x120005C0, 0x00000E80,
 };
+
+static const uint32_t snd_dump_eatdot1[5] = {
+    0xC2001500,
+    0xC2001200,
+    0xC2000F00,
+    0xC2000C00,
+    0xC2000900,
+};
+
+static const uint32_t snd_dump_eatdot2[5] = {
+    0xC2000700,
+    0xC2000A00,
+    0xC2000D00,
+    0xC2001000,
+    0xC2001300,
+};
+
+static const uint32_t snd_dump_eatghost[31] = {
+    0xC5000020,
+    0xC5000040,
+    0xC5000060,
+    0xC5000080,
+    0xC50000A0,
+    0xC50000C0,
+    0xC50000E0,
+    0xC5000100,
+    0xC5000120,
+    0xC5000140,
+    0xC5000160,
+    0xC5000180,
+    0xC50001A0,
+    0xC50001C0,
+    0xC50001E0,
+    0xC5000200,
+    0xC5000220,
+    0xC5000240,
+    0xC5000260,
+    0xC5000280,
+    0xC50002A0,
+    0xC50002C0,
+    0xC50002E0,
+    0xC5000300,
+    0xC5000320,
+    0xC5000340,
+    0xC5000360,
+    0xC5000380,
+    0xC50003A0,
+    0xC50003C0,
+    0xC50003E0,
+};
+
+static const uint32_t snd_dump_eatfruit[23] = {
+    0xF6001600,
+    0xF6001400,
+    0xF6001200,
+    0xF6001000,
+    0xF6000E00,
+    0xF6000C00,
+    0xF6000A00,
+    0xF6000800,
+    0xF6000600,
+    0xF6000400,
+    0xF6000200,
+    0xF6000400,
+    0xF6000600,
+    0xF6000800,
+    0xF6000A00,
+    0xF6000C00,
+    0xF6000E00,
+    0xF6001000,
+    0xF6001200,
+    0xF6001400,
+    0xF6001600,
+    0xF6001800,
+    0xF6001A00,
+};
+

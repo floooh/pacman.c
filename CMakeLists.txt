@@ -31,7 +31,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
         "-framework Metal"
         "-framework AudioToolbox")
 else()
-    add_library(sokol STATIC sokol/sokol.c ${SOKOL_HEADERS})
     if (CMAKE_SYSTEM_NAME STREQUAL Linux)
         target_link_libraries(sokol X11 Xi Xcursor GL asound dl m)
     endif()

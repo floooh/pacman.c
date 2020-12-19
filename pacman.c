@@ -494,6 +494,7 @@ static void snd_func_eatdot1(int slot);
 static void snd_func_eatdot2(int slot);
 static void snd_func_eatghost(int slot);
 static void snd_func_eatfruit(int slot);
+static void snd_func_weeooh(int slot);
 
 // sound effect description structs
 static const sound_desc_t snd_prelude = {
@@ -520,6 +521,11 @@ static const sound_desc_t snd_eatghost = {
 static const sound_desc_t snd_eatfruit = {
     .func = snd_func_eatfruit,
     .voice = { false, false, true }
+};
+
+static const sound_desc_t snd_weeooh = {
+    .func = snd_func_weeooh,
+    .voice = { false, true, false }
 };
 
 // forward declarations
@@ -2037,12 +2043,13 @@ static void game_tick(void) {
     if (now(state.game.ready_started)) {
         game_round_init();
         // after 2 seconds start the interactive game loop
-        start_after(&state.game.round_started, 2*60);
+        start_after(&state.game.round_started, 2*60+10);
     }
     if (now(state.game.round_started)) {
         state.game.freeze &= ~FREEZETYPE_READY;
         // clear the 'READY!' message
         vid_color_text(i2(11,20), 0x10, "      ");
+        snd_start(1, &snd_weeooh);
     }
 
     // activate/deactivate bonus fruit
@@ -2118,6 +2125,8 @@ static void intro_tick(void) {
 
     // on intro-state enter, enable input and draw any initial text
     if (now(state.intro.started)) {
+        snd_clear();
+        spr_clear();
         start(&state.gfx.fadein);
         input_enable();
         vid_clear(TILE_SPACE, COLOR_DEFAULT);
@@ -2128,7 +2137,6 @@ static void intro_tick(void) {
         }
         vid_text(i2(7,5),  "CHARACTER / NICKNAME");
         vid_text(i2(3,35), "CREDIT  0");
-        spr_clear();
         disable(&state.intro.chase);
     }
 
@@ -3079,6 +3087,23 @@ static void snd_func_eatfruit(int slot) {
     }
     else {
         voice->frequency += 0x0200;
+    }
+}
+
+static void snd_func_weeooh(int slot) {
+    assert((slot >= 0) && (slot < NUM_SOUNDS));
+    sound_t* snd = &state.audio.sound[slot];
+    voice_t* voice = &state.audio.voice[1];
+    if (snd->cur_tick == 0) {
+        voice->volume = 6;
+        voice->waveform = 6;
+        voice->frequency = 0x1000;
+    }
+    else if ((snd->cur_tick % 24) < 12) {
+        voice->frequency += 0x0200;
+    }
+    else {
+        voice->frequency -= 0x0200;
     }
 }
 

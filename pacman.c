@@ -248,8 +248,12 @@ typedef struct {
     int2_t tile_pos;
 } debugmarker_t;
 
+// callback function prototype for procedural sounds
+typedef void (*sound_func_t)(int slot);
+
 // a sound effect description used as param for snd_start()
 typedef struct {
+    sound_func_t func;      // callback function (if procedural sound)
     const uint32_t* ptr;    // pointer to register dump data
     uint32_t size;          // byte size of register dump data
     bool voice[3];          // true to activate voice
@@ -279,6 +283,7 @@ typedef enum {
 // a currently playing sound effect
 typedef struct {
     uint32_t cur_tick;      // current tick counter
+    sound_func_t func;      // optional function pointer for prodecural sounds
     uint32_t num_ticks;     // length of sound effect in 60Hz ticks
     uint32_t stride;        // number of uint32_t values per tick
     const uint32_t* data;   // 3 * num_ticks register dump values
@@ -483,10 +488,12 @@ static const levelspec_t levelspec_table[MAX_LEVELSPEC] = {
 
 // forward-declared sound-effect register dumps (recorded from Pacman arcade emulator)
 static const uint32_t snd_dump_prelude[490];
-static const uint32_t snd_dump_eatdot1[5];
-static const uint32_t snd_dump_eatdot2[5];
-static const uint32_t snd_dump_eatghost[31];
-static const uint32_t snd_dump_eatfruit[23];
+
+// procedural sound effect callbacks
+static void snd_func_eatdot1(int slot);
+static void snd_func_eatdot2(int slot);
+static void snd_func_eatghost(int slot);
+static void snd_func_eatfruit(int slot);
 
 // sound effect description structs
 static const sound_desc_t snd_prelude = {
@@ -496,26 +503,22 @@ static const sound_desc_t snd_prelude = {
 };
 
 static const sound_desc_t snd_eatdot1 = {
-    .ptr = snd_dump_eatdot1,
-    .size = sizeof(snd_dump_eatdot1),
+    .func = snd_func_eatdot1,
     .voice = { false, false, true }
 };
 
 static const sound_desc_t snd_eatdot2 = {
-    .ptr = snd_dump_eatdot2,
-    .size = sizeof(snd_dump_eatdot2),
+    .func = snd_func_eatdot2,
     .voice = { false, false, true }
 };
 
 static const sound_desc_t snd_eatghost = {
-    .ptr = snd_dump_eatghost,
-    .size = sizeof(snd_dump_eatghost),
+    .func = snd_func_eatghost,
     .voice = { false, false, true }
 };
 
 static const sound_desc_t snd_eatfruit = {
-    .ptr = snd_dump_eatfruit,
-    .size = sizeof(snd_dump_eatfruit),
+    .func = snd_func_eatfruit,
     .voice = { false, false, true }
 };
 
@@ -2915,7 +2918,12 @@ static void snd_tick(void) {
     // for each active sound effect...
     for (int sound_slot = 0; sound_slot < NUM_SOUNDS; sound_slot++) {
         sound_t* snd = &state.audio.sound[sound_slot];
-        if (snd->flags & SOUNDFLAG_ALL_VOICES) {
+        if (snd->func) {
+            // procedural sound effect
+            snd->func(sound_slot);
+        }
+        else if (snd->flags & SOUNDFLAG_ALL_VOICES) {
+            // register-dump sound effect
             assert(snd->data);
             // sound finished or looping?
             if (snd->cur_tick == snd->num_ticks) {
@@ -2944,8 +2952,8 @@ static void snd_tick(void) {
                     voice->volume = (val>>28) & 0xF;
                 }
             }
-            snd->cur_tick++;
         }
+        snd->cur_tick++;
     }
 }
 
@@ -2958,26 +2966,32 @@ static void snd_clear(void) {
 // start a sound effect
 static void snd_start(int slot, const sound_desc_t* desc) {
     assert((slot >= 0) && (slot < NUM_SOUNDS));
-    assert(desc && desc->ptr);
-    assert((desc->size > 0) && ((desc->size & 3) == 0));
+    assert(desc);
+    assert((desc->ptr && desc->size) || desc->func);
+
     int num_voices = 0;
     for (int i = 0; i < NUM_VOICES; i++) {
         if (desc->voice[i]) {
             num_voices++;
         }
     }
-    assert((desc->size % (num_voices*sizeof(uint32_t))) == 0);
-
     sound_t* snd = &state.audio.sound[slot];
-    snd->cur_tick = 0;
-    snd->stride = num_voices;
-    snd->num_ticks = desc->size / (snd->stride*sizeof(uint32_t));
-    snd->data = desc->ptr;
+    *snd = (sound_t) { 0 };
     snd->flags = desc->looping ? SOUNDFLAG_LOOPING : 0;
     for (int i = 0; i < NUM_VOICES; i++) {
         if (desc->voice[i]) {
             snd->flags |= (1<<i);
         }
+    }
+    if (desc->func) {
+        // procedural sounds only need a callback function
+        snd->func = desc->func;
+    }
+    else {
+        assert((desc->size % (num_voices*sizeof(uint32_t))) == 0);
+        snd->stride = num_voices;
+        snd->num_ticks = desc->size / (snd->stride*sizeof(uint32_t));
+        snd->data = desc->ptr;
     }
 }
 
@@ -2994,6 +3008,78 @@ static void snd_stop(int slot) {
 
     // clear the sound slot
     state.audio.sound[slot] = (sound_t) { 0 };
+}
+
+// procedural sound effects
+static void snd_func_eatdot1(int slot) {
+    assert((slot >= 0) && (slot < NUM_SOUNDS));
+    sound_t* snd = &state.audio.sound[slot];
+    voice_t* voice = &state.audio.voice[2];
+    if (snd->cur_tick == 0) {
+        voice->volume = 12;
+        voice->waveform = 2;
+        voice->frequency = 0x1500;
+    }
+    else if (snd->cur_tick == 5) {
+        snd_stop(slot);
+    }
+    else {
+        voice->frequency -= 0x0300;
+    }
+}
+
+static void snd_func_eatdot2(int slot) {
+    assert((slot >= 0) && (slot < NUM_SOUNDS));
+    sound_t* snd = &state.audio.sound[slot];
+    voice_t* voice = &state.audio.voice[2];
+    if (snd->cur_tick == 0) {
+        voice->volume = 12;
+        voice->waveform = 2;
+        voice->frequency = 0x0700;
+    }
+    else if (snd->cur_tick == 5) {
+        snd_stop(slot);
+    }
+    else {
+        voice->frequency += 0x300;
+    }
+}
+
+static void snd_func_eatghost(int slot) {
+    assert((slot >= 0) && (slot < NUM_SOUNDS));
+    sound_t* snd = &state.audio.sound[slot];
+    voice_t* voice = &state.audio.voice[2];
+    if (snd->cur_tick == 0) {
+        voice->volume = 12;
+        voice->waveform = 5;
+        voice->frequency = 0;
+    }
+    else if (snd->cur_tick == 32) {
+        snd_stop(slot);
+    }
+    else {
+        voice->frequency += 0x20;
+    }
+}
+
+static void snd_func_eatfruit(int slot) {
+    assert((slot >= 0) && (slot < NUM_SOUNDS));
+    sound_t* snd = &state.audio.sound[slot];
+    voice_t* voice = &state.audio.voice[2];
+    if (snd->cur_tick == 0) {
+        voice->volume = 15;
+        voice->waveform = 6;
+        voice->frequency = 0x1600;
+    }
+    else if (snd->cur_tick == 23) {
+        snd_stop(slot);
+    }
+    else if (snd->cur_tick < 11) {
+        voice->frequency -= 0x200;
+    }
+    else {
+        voice->frequency += 0x0200;
+    }
 }
 
 /*== EMBEDDED DATA ===========================================================*/
@@ -3821,80 +3907,3 @@ static const uint32_t snd_dump_prelude[490] = {
     0x220005C0, 0x00000E80,
     0x120005C0, 0x00000E80,
 };
-
-static const uint32_t snd_dump_eatdot1[5] = {
-    0xC2001500,
-    0xC2001200,
-    0xC2000F00,
-    0xC2000C00,
-    0xC2000900,
-};
-
-static const uint32_t snd_dump_eatdot2[5] = {
-    0xC2000700,
-    0xC2000A00,
-    0xC2000D00,
-    0xC2001000,
-    0xC2001300,
-};
-
-static const uint32_t snd_dump_eatghost[31] = {
-    0xC5000020,
-    0xC5000040,
-    0xC5000060,
-    0xC5000080,
-    0xC50000A0,
-    0xC50000C0,
-    0xC50000E0,
-    0xC5000100,
-    0xC5000120,
-    0xC5000140,
-    0xC5000160,
-    0xC5000180,
-    0xC50001A0,
-    0xC50001C0,
-    0xC50001E0,
-    0xC5000200,
-    0xC5000220,
-    0xC5000240,
-    0xC5000260,
-    0xC5000280,
-    0xC50002A0,
-    0xC50002C0,
-    0xC50002E0,
-    0xC5000300,
-    0xC5000320,
-    0xC5000340,
-    0xC5000360,
-    0xC5000380,
-    0xC50003A0,
-    0xC50003C0,
-    0xC50003E0,
-};
-
-static const uint32_t snd_dump_eatfruit[23] = {
-    0xF6001600,
-    0xF6001400,
-    0xF6001200,
-    0xF6001000,
-    0xF6000E00,
-    0xF6000C00,
-    0xF6000A00,
-    0xF6000800,
-    0xF6000600,
-    0xF6000400,
-    0xF6000200,
-    0xF6000400,
-    0xF6000600,
-    0xF6000800,
-    0xF6000A00,
-    0xF6000C00,
-    0xF6000E00,
-    0xF6001000,
-    0xF6001200,
-    0xF6001400,
-    0xF6001600,
-    0xF6001800,
-    0xF6001A00,
-};
-

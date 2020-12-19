@@ -489,6 +489,7 @@ static const levelspec_t levelspec_table[MAX_LEVELSPEC] = {
 
 // forward-declared sound-effect register dumps (recorded from Pacman arcade emulator)
 static const uint32_t snd_dump_prelude[490];
+static const uint32_t snd_dump_dead[90];
 
 // procedural sound effect callbacks
 static void snd_func_eatdot1(int slot);
@@ -503,6 +504,13 @@ static const sound_desc_t snd_prelude = {
     .ptr = snd_dump_prelude,
     .size = sizeof(snd_dump_prelude),
     .voice = { true, true, false }
+};
+
+static const sound_desc_t snd_dead = {
+    .ptr = snd_dump_dead,
+    .size = sizeof(snd_dump_dead),
+    .voice = { false, false, true }
+
 };
 
 static const sound_desc_t snd_eatdot1 = {
@@ -1019,8 +1027,7 @@ static void spr_anim_pacman(dir_t dir, uint32_t tick) {
 static void spr_anim_pacman_death(uint32_t tick) {
     // the death animation tile sequence starts at sprite tile number 52 and ends at 63
     sprite_t* spr = spr_pacman();
-    // show the first frame a little bit longer
-    uint32_t tile = (tick < 24) ? 52 : 52 + ((tick - 24) / 8);
+    uint32_t tile = 52 + (tick / 8);
     if (tile > 63) {
         tile = 63;
     }
@@ -2079,6 +2086,11 @@ static void game_tick(void) {
         }
     }
 
+    // play pacman-death sound
+    if (after_once(state.game.pacman_eaten, PACMAN_EATEN_TICKS)) {
+        snd_start(2, &snd_dead);
+    }
+
     if (!state.game.freeze) {
         game_update_actors();
     }
@@ -2989,18 +3001,14 @@ static void snd_start(int slot, const sound_desc_t* desc) {
     assert(desc);
     assert((desc->ptr && desc->size) || desc->func);
 
-    int num_voices = 0;
-    for (int i = 0; i < NUM_VOICES; i++) {
-        if (desc->voice[i]) {
-            num_voices++;
-        }
-    }
     sound_t* snd = &state.audio.sound[slot];
     *snd = (sound_t) { 0 };
     snd->flags = desc->looping ? SOUNDFLAG_LOOPING : 0;
+    int num_voices = 0;
     for (int i = 0; i < NUM_VOICES; i++) {
         if (desc->voice[i]) {
             snd->flags |= (1<<i);
+            num_voices++;
         }
     }
     if (desc->func) {
@@ -3960,4 +3968,97 @@ static const uint32_t snd_dump_prelude[490] = {
     0x320005C0, 0x00000E80,
     0x220005C0, 0x00000E80,
     0x120005C0, 0x00000E80,
+};
+
+static const uint32_t snd_dump_dead[90] = {
+    0xF1001F00,
+    0xF1001E00,
+    0xF1001D00,
+    0xF1001C00,
+    0xF1001B00,
+    0xF1001C00,
+    0xF1001D00,
+    0xF1001E00,
+    0xF1001F00,
+    0xF1002000,
+    0xF1002100,
+    0xE1001D00,
+    0xE1001C00,
+    0xE1001B00,
+    0xE1001A00,
+    0xE1001900,
+    0xE1001800,
+    0xE1001900,
+    0xE1001A00,
+    0xE1001B00,
+    0xE1001C00,
+    0xE1001D00,
+    0xE1001E00,
+    0xD1001B00,
+    0xD1001A00,
+    0xD1001900,
+    0xD1001800,
+    0xD1001700,
+    0xD1001600,
+    0xD1001700,
+    0xD1001800,
+    0xD1001900,
+    0xD1001A00,
+    0xD1001B00,
+    0xD1001C00,
+    0xC1001900,
+    0xC1001800,
+    0xC1001700,
+    0xC1001600,
+    0xC1001500,
+    0xC1001400,
+    0xC1001500,
+    0xC1001600,
+    0xC1001700,
+    0xC1001800,
+    0xC1001900,
+    0xC1001A00,
+    0xB1001700,
+    0xB1001600,
+    0xB1001500,
+    0xB1001400,
+    0xB1001300,
+    0xB1001200,
+    0xB1001300,
+    0xB1001400,
+    0xB1001500,
+    0xB1001600,
+    0xB1001700,
+    0xB1001800,
+    0xA1001500,
+    0xA1001400,
+    0xA1001300,
+    0xA1001200,
+    0xA1001100,
+    0xA1001000,
+    0xA1001100,
+    0xA1001200,
+    0x80000800,
+    0x80001000,
+    0x80001800,
+    0x80002000,
+    0x80002800,
+    0x80003000,
+    0x80003800,
+    0x80004000,
+    0x80004800,
+    0x80005000,
+    0x80005800,
+    0x00000000,
+    0x80000800,
+    0x80001000,
+    0x80001800,
+    0x80002000,
+    0x80002800,
+    0x80003000,
+    0x80003800,
+    0x80004000,
+    0x80004800,
+    0x80005000,
+    0x80005800,
 };

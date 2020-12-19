@@ -455,6 +455,7 @@ static const uint8_t fruit_score_tiles[NUM_FRUITS][4] = {
 typedef struct {
     fruit_t bonus_fruit;
     uint16_t bonus_score;
+    uint16_t fright_ticks;
     // FIXME: the various Pacman and ghost speeds
 } levelspec_t;
 
@@ -462,27 +463,27 @@ enum {
     MAX_LEVELSPEC = 21,
 };
 static const levelspec_t levelspec_table[MAX_LEVELSPEC] = {
-    { FRUIT_CHERRIES,   10 },
-    { FRUIT_STRAWBERRY, 30 },
-    { FRUIT_PEACH,      50 },
-    { FRUIT_PEACH,      50 },
-    { FRUIT_APPLE,      70 },
-    { FRUIT_APPLE,      70 },
-    { FRUIT_GRAPES,     100 },
-    { FRUIT_GRAPES,     100 },
-    { FRUIT_GALAXIAN,   200 },
-    { FRUIT_GALAXIAN,   200 },
-    { FRUIT_BELL,       300 },
-    { FRUIT_BELL,       300 },
-    { FRUIT_KEY,        500 },
-    { FRUIT_KEY,        500 },
-    { FRUIT_KEY,        500 },
-    { FRUIT_KEY,        500 },
-    { FRUIT_KEY,        500 },
-    { FRUIT_KEY,        500 },
-    { FRUIT_KEY,        500 },
-    { FRUIT_KEY,        500 },
-    { FRUIT_KEY,        500 },
+    { FRUIT_CHERRIES,   10,  6*60, },
+    { FRUIT_STRAWBERRY, 30,  5*60, },
+    { FRUIT_PEACH,      50,  4*60, },
+    { FRUIT_PEACH,      50,  3*60, },
+    { FRUIT_APPLE,      70,  2*60, },
+    { FRUIT_APPLE,      70,  5*60, },
+    { FRUIT_GRAPES,     100, 2*60, },
+    { FRUIT_GRAPES,     100, 2*60, },
+    { FRUIT_GALAXIAN,   200, 1*60, },
+    { FRUIT_GALAXIAN,   200, 5*60, },
+    { FRUIT_BELL,       300, 2*60, },
+    { FRUIT_BELL,       300, 1*60, },
+    { FRUIT_KEY,        500, 1*60, },
+    { FRUIT_KEY,        500, 3*60, },
+    { FRUIT_KEY,        500, 1*60, },
+    { FRUIT_KEY,        500, 1*60, },
+    { FRUIT_KEY,        500, 1,    },
+    { FRUIT_KEY,        500, 1*60, },
+    { FRUIT_KEY,        500, 1,    },
+    { FRUIT_KEY,        500, 1,    },
+    { FRUIT_KEY,        500, 1,    },
     // from here on repeating
 };
 
@@ -495,6 +496,7 @@ static void snd_func_eatdot2(int slot);
 static void snd_func_eatghost(int slot);
 static void snd_func_eatfruit(int slot);
 static void snd_func_weeooh(int slot);
+static void snd_func_frightened(int slot);
 
 // sound effect description structs
 static const sound_desc_t snd_prelude = {
@@ -525,6 +527,11 @@ static const sound_desc_t snd_eatfruit = {
 
 static const sound_desc_t snd_weeooh = {
     .func = snd_func_weeooh,
+    .voice = { false, true, false }
+};
+
+static const sound_desc_t snd_frightened = {
+    .func = snd_func_frightened,
     .voice = { false, true, false }
 };
 
@@ -1044,8 +1051,7 @@ static void spr_anim_ghost_frightened(ghosttype_t ghost_type, uint32_t tick) {
     uint32_t phase = (tick / 4) & 1;
     sprite_t* spr = spr_ghost(ghost_type);
     spr->tile = tiles[phase];
-    // FIXME: replace hardwired time offset
-    if (tick > 4*60) {
+    if (tick > (levelspec(state.game.round).fright_ticks - 60)) {
         // towards end of frightening period, start blinking
         spr->color = (tick & 0x10) ? COLOR_FRIGHTENED : COLOR_FRIGHTENED_BLINKING;
     }
@@ -1532,8 +1538,7 @@ static void game_update_sprites(void) {
                     spr_anim_ghost_eyes(i, ghost->actor.dir);
                     break;
                 case GHOSTSTATE_FRIGHTENED:
-                    // FIXME: ghost show the frightened visualization also
-                    // in the 'house-states'
+                    // FIXME: ghost show the frightened visualization also in the 'house-states'
                     spr_anim_ghost_frightened(i, since(ghost->frightened));
                     break;
                 default:
@@ -1671,14 +1676,13 @@ static void game_update_ghost_state(ghost_t* ghost) {
             }
             break;
         case GHOSTSTATE_FRIGHTENED:
-            // FIXME: length of frightened period is variable
-            if (after(ghost->frightened, 6*60)) {
+            if (after(ghost->frightened, levelspec(state.game.round).fright_ticks)) {
                 new_state = game_scatter_chase_phase();
             }
             break;
         default:
             // FIXME: length of frightened period is variable
-            if (before(ghost->frightened, 6*60)) {
+            if (before(ghost->frightened, levelspec(state.game.round).fright_ticks)) {
                 new_state = GHOSTSTATE_FRIGHTENED;
             }
             else {
@@ -1910,6 +1914,7 @@ static void game_update_dots_eaten(void) {
     if (state.game.num_dots_eaten == NUM_DOTS) {
         // all dots eaten, round won
         start(&state.game.round_won);
+        snd_clear();
     }
     else if ((state.game.num_dots_eaten == 70) || (state.game.num_dots_eaten == 170)) {
         // at 70 and 170 dots, show the bonus fruit
@@ -1958,6 +1963,7 @@ static void game_update_actors(void) {
             for (int i = 0; i < NUM_GHOSTS; i++) {
                 start(&state.game.ghost[i].frightened);
             }
+            snd_start(1, &snd_frightened);
         }
         // check if Pacman eats the bonus fruit
         if (state.game.active_fruit != FRUIT_NONE) {
@@ -1989,6 +1995,7 @@ static void game_update_actors(void) {
                 else if ((ghost->state == GHOSTSTATE_CHASE) || (ghost->state == GHOSTSTATE_SCATTER)) {
                     // Pacman dies
                     #if !DBG_GODMODE
+                    snd_clear();
                     start(&state.game.pacman_eaten);
                     state.game.freeze |= FREEZETYPE_DEAD;
                     // start a new round after Pacman-death-sequence has completed, or start game-over sequence
@@ -2058,6 +2065,11 @@ static void game_tick(void) {
     }
     else if (after_once(state.game.fruit_active, FRUITACTIVE_TICKS)) {
         state.game.active_fruit = FRUIT_NONE;
+    }
+
+    // stop frightened sound and start weeooh sound
+    if (after_once(state.game.pill_eaten, levelspec(state.game.round).fright_ticks)) {
+        snd_start(1, &snd_weeooh);
     }
 
     // if game is frozen because Pacman ate a ghost, unfreeze after a while
@@ -3104,6 +3116,23 @@ static void snd_func_weeooh(int slot) {
     }
     else {
         voice->frequency -= 0x0200;
+    }
+}
+
+static void snd_func_frightened(int slot) {
+    assert((slot >= 0) && (slot < NUM_SOUNDS));
+    sound_t* snd = &state.audio.sound[slot];
+    voice_t* voice = &state.audio.voice[1];
+    if (snd->cur_tick == 0) {
+        voice->volume = 10;
+        voice->waveform = 4;
+        voice->frequency = 0x0180;
+    }
+    else if ((snd->cur_tick % 8) == 0) {
+        voice->frequency = 0x0180;
+    }
+    else {
+        voice->frequency += 0x180;
     }
 }
 

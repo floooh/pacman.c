@@ -1580,11 +1580,7 @@ static bool game_pacman_should_move(void) {
         return false;
     }
     else {
-        // FIXME: hardcode regular speed to 80% for now, this
-        // needs to be adjusted based on the game round
-        // FIXME: during frighten phase, Pacman also speeds
-        // up during levels 1..4
-        return 0 != (state.timing.tick % 5);
+        return 0 != (state.timing.tick % 8);
     }
 }
 
@@ -1594,7 +1590,6 @@ static bool game_pacman_should_move(void) {
 */
 static int game_ghost_speed(const ghost_t* ghost) {
     assert(ghost);
-    // FIXME: speeds are also level-dependent!
     switch (ghost->state) {
         case GHOSTSTATE_HOUSE:
         case GHOSTSTATE_LEAVEHOUSE:
@@ -1608,12 +1603,11 @@ static int game_ghost_speed(const ghost_t* ghost) {
             // estimated 1.5x when hollow, Pacman Dossier is silent on this
             return (state.timing.tick & 1) ? 1 : 2;
         default:
-            // in tunnel, move at 40%, otherwise 75%
             if (is_tunnel(pixel_to_tile_pos(ghost->actor.pos))) {
                 return ((state.timing.tick * 2) % 4) ? 1 : 0;
             }
             else {
-                return (state.timing.tick % 4) ? 1 : 0;
+                return (state.timing.tick % 7) ? 1 : 0;
             }
     }
 }

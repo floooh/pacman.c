@@ -10,6 +10,8 @@
 #include <string.h> // memset()
 #include <stdlib.h> // abs()
 
+#define AUDIO_VOLUME (0.5f)
+
 #define DBG_SKIP_INTRO      (0)     // set to (1) to skip intro
 #define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
 #define DBG_START_ROUND     (0)     // set to any starting round <=255
@@ -2912,8 +2914,7 @@ static void snd_sample_tick(void) {
             voice->sample_acc = voice->sample_div = 0.0f;
         }
     }
-    sm *= 0.333333f;
-    state.audio.sample_buffer[state.audio.num_samples++] = sm;
+    state.audio.sample_buffer[state.audio.num_samples++] = sm * 0.333 * AUDIO_VOLUME;
     if (state.audio.num_samples == NUM_SAMPLES) {
         saudio_push(state.audio.sample_buffer, state.audio.num_samples);
         state.audio.num_samples = 0;

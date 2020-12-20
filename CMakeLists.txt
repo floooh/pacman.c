@@ -7,9 +7,8 @@ endif()
 
 # Linux -pthread shenanigans
 if (CMAKE_SYSTEM_NAME STREQUAL Linux)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pthread")
+    set(THREADS_PREFER_PTHREAD_FLAG ON)
+    find_package(Threads REQUIRED)
 endif()
 
 #=== LIBRARY: sokol
@@ -33,6 +32,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
 else()
     if (CMAKE_SYSTEM_NAME STREQUAL Linux)
         target_link_libraries(sokol X11 Xi Xcursor GL asound dl m)
+        target_link_libraries(sokol PUBLIC Threads::Threads)
     endif()
 endif()
 target_include_directories(sokol INTERFACE sokol)

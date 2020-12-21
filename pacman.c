@@ -1,6 +1,138 @@
-//------------------------------------------------------------------------------
-//  pacman.c
-//------------------------------------------------------------------------------
+/*------------------------------------------------------------------------------
+    pacman.c
+
+    A Pacman clone written in C99 using the sokol headers for platform
+    abstraction.
+
+    The git repository is here:
+
+    https://github.com/floooh/pacman.c
+
+    A WASM version running in browsers can be found here:
+
+    https://floooh.github.io/tiny8bit/pacman.html
+
+    Some basic concepts and ideas are worth explaining upfront:
+
+    The game code structure is a bit "radical" and sometimes goes against
+    what is considered good practice for medium and large code bases. This is
+    fine because this is a small game written by a single person. Small
+    code bases written by small teams allow a different organizational
+    approach than large code bases written by large teams.
+
+    So here are some of those "extremist" methods used in this tiny project:
+    
+    Instead of artifically splitting the code into many small source files,
+    everything is in a single source file readable from top to bottom.
+
+    Instead of data-encapsulation and -hiding, all data lives in a single,
+    global, nested data structure (this isn't actually as radical and
+    experimental as it sounds, I've been using this approach for quite a
+    while now for all my hobby code). An interesting side effect of this
+    upfront-defined static memory layout is that there are no dynamic
+    allocations in the entire game code (only a handful allocations during
+    initialization of the Sokol headers). 
+
+    Instead of "wasting" time thinking too much about high-level abstractions
+    and reusability, the code has been written in a fairly adhoc-manner "from
+    start to finish", solving problems as they showed up in the most direct
+    way possible. When parts of the code became too entangled I tried to step
+    back a bit, take a pause and come back later with a better idea how to
+    rewrite those parts in a more straightforward manner. Of course
+    "straightforward" and "readability" are in the eye of the beholder.
+
+    The actual gameplay code (Pacman and ghost behaviours) has been
+    implemented after the "Pacman Dossier" by Jamey Pittman (a PDF copy has
+    been included in the project), but there are some minor differences to a
+    Pacman arcade machine emulator, some intended, some not
+    (https://floooh.github.io/tiny8bit/pacman.html):
+
+        - Ghost behaviour differs at the start of a round, for instance Blinky
+          heads straight to his scatter target, while on the arcade machine,
+          Blinky seems to be in chase mode for one or two seconds before 
+          switching to scatter mode.
+        - The attract mode animation in the intro screen is missing (where
+          Pacman is chased by ghosts, eats a pill and then hunts the ghost).
+        - Likewise, the 'interlude' animation between levels is missing.
+        - Pacman and ghost speeds don't increase in later maps.
+
+    The rendering and audio code resembles the original Pacman arcade machine
+    hardware:
+
+        - the tile and sprite pixel data, hardware color palette data and
+          sound wavetable data is taken directly from embedded arcade machine
+          ROM dumps
+        - background tiles are rendered from two 28x36 byte buffers (one for
+          tile-codes, the other for color-codes), this is similar to an actual
+          arcade machine, with the only difference that the tile- and color-buffer
+          has a straightforward linear memory layout
+        - background tile rendering is done with dynamically uploaded vertex
+          data (two triangles per tile), with color-palette decoding done in 
+          the pixel shader
+        - up to 8 16x16 sprites are rendered as vertex quads, with the same 
+          color palette decoding happening in the pixel shader as for background
+          tiles.
+        - audio output works through an actual Namco WSG emulator which generates
+          sound samples for 3 hardware voices from a 20-bit frequency counter, 
+          4-bit volume and 3-bit wave type (for 8 wavetables made of 32 sample
+          values each stored in a ROM dump)
+        - sound effects are implemented by writing new values to the hardware
+          voice 'registers' once per 60Hz tick, this can happen in two ways:
+            - as 'procedural' sound effects, where a callback function computes 
+              the new voice register values
+            - or via 'register dump' playback, where the voice register values
+              have been captured at 60Hz frequency from an actual Pacman arcade
+              emulator
+          Only two sound effects are register dumps: the little music track at
+          the start of a game, and the sound effect when Pacman dies. All other
+          effects are simple procedural effects.
+
+    The only concept worth explaining in the gameplay code is how timing
+    and 'asynchronous actions'work:
+
+    The entire gameplay logic is driven by a global 60 Hz game tick which is
+    counting upward.
+
+    Gamplay actions are initiated by a combination of 'time triggers' and a simple
+    vocabulary to initialize and test trigger conditions. This time trigger system
+    is an extremely simple replacement for more powerful event systems in
+    'proper' game engines.
+
+    Here are some pseudo-code examples how time triggers can be used (unrelated
+    to Pacman):
+
+    To immediately trigger an action in one place of the code, and 'realize'
+    this action in one or several other places:
+
+        // if a monster has been eaten, trigger the 'monster eaten' action:
+        if (monster_eaten()) {
+            start(&state.game.monster_eaten);
+        }
+
+        // ...somewhere else, we might increase the score if a monster has been eaten:
+        if (now(state.game.monster_eaten)) {
+            state.game.score += 10;
+        }
+
+        // ...and yet somewhere else in the code, we might want to play a sound effect
+        if (now(state.game.monster_eaten)) {
+            // play sound effect...
+        }
+
+    We can also start actions in the future, which allows to batch several several
+    actions in one place:
+
+        // start fading out now, after one second (60 ticks) start a new
+        // game round, and fade in, after another second when fadein has 
+        // finished, start the actual game round
+        start(&state.gfx.fadein);
+        start_after(&state.game.started, 60);
+        start_after(&state.gfx.facein, 60);
+        start_after(&state.game.ready_started, 2*60);
+
+    As I said above, there's a whole little function vocabulary built around
+    time triggers, but those are hopefully all self-explanatory.
+*/
 #include "sokol_app.h"
 #include "sokol_gfx.h"
 #include "sokol_audio.h"
@@ -10,8 +142,8 @@
 #include <string.h> // memset()
 #include <stdlib.h> // abs()
 
+// config defines and global constants
 #define AUDIO_VOLUME (0.5f)
-
 #define DBG_SKIP_INTRO      (0)     // set to (1) to skip intro
 #define DBG_SKIP_PRELUDE    (0)     // set to (1) to skip game prelude
 #define DBG_START_ROUND     (0)     // set to any starting round <=255
@@ -20,7 +152,6 @@
 #define DBG_DOUBLE_SPEED    (0)     // set to (1) to speed up game (useful with godmode)
 #define DBG_GODMODE         (0)     // set to (1) to disable dying
 
-// various constants
 enum {
     // tick duration in microseconds
     #if DBG_DOUBLE_SPEED
@@ -61,7 +192,9 @@ enum {
     FRUITACTIVE_TICKS   = 10*60,    // number of ticks a bonus fruit is shown
 };
 
-// common tile codes
+/* common tile, sprite and color codes, these are the same as on the Pacman
+   arcade machine and extracted by looking at the tile buffers in a Pacman emulator
+*/
 enum {
     TILE_SPACE          = 0x40,
     TILE_DOT            = 0x10,
@@ -77,10 +210,7 @@ enum {
     TILE_GALAXIAN       = 0xA8, // 0xA8..0xAB
     TILE_KEY            = 0xAC, // 0xAC..0xAF
     TILE_DOOR           = 0xCF, // the ghost-house door
-};
 
-// common sprite tile codes
-enum {
     SPRITETILE_INVISIBLE    = 30,
     SPRITETILE_SCORE_200    = 40,
     SPRITETILE_SCORE_400    = 41,
@@ -95,10 +225,7 @@ enum {
     SPRITETILE_GALAXIAN     = 6,
     SPRITETILE_KEY          = 7,
     SPRITETILE_PACMAN_CLOSED_MOUTH = 48,
-};
 
-// common color codes
-enum {
     COLOR_BLANK         = 0x00,
     COLOR_DEFAULT       = 0x0F,
     COLOR_DOT           = 0x10,
@@ -112,7 +239,7 @@ enum {
     COLOR_GHOST_SCORE   = 0x18,
     COLOR_EYES          = 0x19,
     COLOR_CHERRIES      = 0x14,
-    COLOR_STRAWBERRY    = 0x0F, // FIXME: same as COLOR_DEFAULT?
+    COLOR_STRAWBERRY    = 0x0F,
     COLOR_PEACH         = 0x15,
     COLOR_BELL          = 0x16,
     COLOR_APPLE         = 0x14,
@@ -210,7 +337,7 @@ typedef struct {
     uint32_t anim_tick;     // incremented when actor moved in current tick
 } actor_t;
 
-// ghost state
+// ghost AI state
 typedef struct {
     actor_t actor;
     ghosttype_t type;
@@ -256,7 +383,7 @@ typedef void (*sound_func_t)(int slot);
 // a sound effect description used as param for snd_start()
 typedef struct {
     sound_func_t func;      // callback function (if procedural sound)
-    const uint32_t* ptr;    // pointer to register dump data
+    const uint32_t* ptr;    // pointer to register dump data (if a register-dump sound)
     uint32_t size;          // byte size of register dump data
     bool voice[3];          // true to activate voice
     bool looping;           // true to play looping

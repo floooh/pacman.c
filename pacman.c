@@ -119,8 +119,8 @@
             // play sound effect...
         }
 
-    We can also start actions in the future, which allows to batch several several
-    actions in one place:
+    We can also start actions in the future, which allows to batch multiple
+    followup-actions in one place:
 
         // start fading out now, after one second (60 ticks) start a new
         // game round, and fade in, after another second when fadein has 

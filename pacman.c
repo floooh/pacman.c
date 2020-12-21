@@ -1184,7 +1184,7 @@ static void spr_anim_ghost(ghosttype_t ghost_type, dir_t dir, uint32_t tick) {
 
 // set sprite to frightened ghost
 static void spr_anim_ghost_frightened(ghosttype_t ghost_type, uint32_t tick) {
-    static const uint8_t tiles[4] = { 28, 29 };
+    static const uint8_t tiles[2] = { 28, 29 };
     uint32_t phase = (tick / 4) & 1;
     sprite_t* spr = spr_ghost(ghost_type);
     spr->tile = tiles[phase];

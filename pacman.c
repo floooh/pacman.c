@@ -124,10 +124,10 @@
 
         // start fading out now, after one second (60 ticks) start a new
         // game round, and fade in, after another second when fadein has 
-        // finished, start the actual game round
+        // finished, start the actual game loop
         start(&state.gfx.fadein);
         start_after(&state.game.started, 60);
-        start_after(&state.gfx.facein, 60);
+        start_after(&state.gfx.fadeout, 60);
         start_after(&state.game.ready_started, 2*60);
 
     As I said above, there's a whole little function vocabulary built around

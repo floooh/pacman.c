@@ -88,7 +88,7 @@
           effects are simple procedural effects.
 
     The only concept worth explaining in the gameplay code is how timing
-    and 'asynchronous actions'work:
+    and 'asynchronous actions' work:
 
     The entire gameplay logic is driven by a global 60 Hz game tick which is
     counting upward.

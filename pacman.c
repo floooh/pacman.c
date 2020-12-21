@@ -1778,7 +1778,7 @@ static void game_update_ghost_state(ghost_t* ghost) {
     switch (ghost->state) {
         case GHOSTSTATE_EYES:
             // When in eye state (heading back to the ghost house), check if the
-            // target position in fron of the ghost house has been reached, then
+            // target position in front of the ghost house has been reached, then
             // switch into ENTERHOUSE state. Since ghosts in eye state move faster
             // than one pixel per tick, do a fuzzy comparison with the target pos
             if (nearequal_i2(ghost->actor.pos, i2(ANTEPORTAS_X, ANTEPORTAS_Y), 1)) {

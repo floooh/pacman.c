@@ -93,7 +93,7 @@
     The entire gameplay logic is driven by a global 60 Hz game tick which is
     counting upward.
 
-    Gamplay actions are initiated by a combination of 'time triggers' and a simple
+    Gameplay actions are initiated by a combination of 'time triggers' and a simple
     vocabulary to initialize and test trigger conditions. This time trigger system
     is an extremely simple replacement for more powerful event systems in
     'proper' game engines.
@@ -130,7 +130,7 @@
         start_after(&state.gfx.fadein, 60);
         start_after(&state.game.gameloop_started, 2*60);
 
-    As I said above, there's a whole little function vocabulary built around
+    As mentioned above, there's a whole little function vocabulary built around
     time triggers, but those are hopefully all self-explanatory.
 */
 #include "sokol_app.h"
@@ -153,22 +153,22 @@
 #define DBG_GODMODE         (0)     // set to (1) to disable dying
 
 enum {
-    // tick duration in microseconds
+    // tick duration in nanoseconds
     #if DBG_DOUBLE_SPEED
         TICK_DURATION_NS = 8333333,
     #else
         TICK_DURATION_NS = 16666666,
     #endif
-    TICK_TOLERANCE_NS   = 1000000,      // per-frame tolerance in microseconds
+    TICK_TOLERANCE_NS   = 1000000,      // per-frame tolerance in nanoseconds
     NUM_VOICES          = 3,            // number of sound voices
-    NUM_SOUNDS          = 3,            // max number of sounds that can be active
-    NUM_SAMPLES         = 128,          // max number of samples in sample buffer
+    NUM_SOUNDS          = 3,            // max number of sounds effects that can be active at a time
+    NUM_SAMPLES         = 128,          // max number of audio samples in local sample buffer
     DISABLED_TICKS      = 0xFFFFFFFF,   // magic tick value for a disabled timer
-    TILE_WIDTH          = 8,
+    TILE_WIDTH          = 8,            // width and height of a background tile in pixels
     TILE_HEIGHT         = 8,
-    SPRITE_WIDTH        = 16,
+    SPRITE_WIDTH        = 16,           // width and height of a sprite in pixels
     SPRITE_HEIGHT       = 16,
-    DISPLAY_TILES_X     = 28,
+    DISPLAY_TILES_X     = 28,           // tile buffer width and height
     DISPLAY_TILES_Y     = 36, 
     DISPLAY_PIXELS_X    = DISPLAY_TILES_X * TILE_WIDTH,
     DISPLAY_PIXELS_Y    = DISPLAY_TILES_Y * TILE_HEIGHT,
@@ -177,12 +177,12 @@ enum {
     TILE_TEXTURE_WIDTH  = 256 * TILE_WIDTH,
     TILE_TEXTURE_HEIGHT = TILE_HEIGHT + SPRITE_HEIGHT,  
     MAX_VERTICES        = ((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + NUM_DEBUG_MARKERS) * 6,
-    FADE_TICKS          = 30,       // duration of fade-in/out
+    FADE_TICKS          = 30,   // duration of fade-in/out
     NUM_LIVES           = 3,
     NUM_STATUS_FRUITS   = 7,    // max number of displayed fruits at bottom right
     NUM_DOTS            = 244,  // 240 small dots + 4 pills
     NUM_PILLS           = 4,    // number of energizer pills on playfield
-    ANTEPORTAS_X        = 14*TILE_WIDTH,  // pixel position of the house enter/leave point
+    ANTEPORTAS_X        = 14*TILE_WIDTH,  // pixel position of the ghost house enter/leave point
     ANTEPORTAS_Y        = 14*TILE_HEIGHT + TILE_HEIGHT/2,
     GHOST_EATEN_FREEZE_TICKS = 60,  // number of ticks the game freezes after Pacman eats a ghost
     PACMAN_EATEN_TICKS  = 60,       // number of ticks to freeze game when Pacman is eaten
@@ -193,7 +193,7 @@ enum {
 };
 
 /* common tile, sprite and color codes, these are the same as on the Pacman
-   arcade machine and extracted by looking at the tile buffers in a Pacman emulator
+   arcade machine and extracted by looking at memory locations of a Pacman emulator
 */
 enum {
     TILE_SPACE          = 0x40,
@@ -265,7 +265,7 @@ typedef enum {
     NUM_DIRS
 } dir_t;
 
-// fruit types
+// bonus fruit types
 typedef enum {
     FRUIT_NONE,
     FRUIT_CHERRIES,
@@ -279,7 +279,7 @@ typedef enum {
     NUM_FRUITS
 } fruit_t;
 
-// sprite indices
+// sprite 'hardware' indices
 typedef enum {
     SPRITE_PACMAN,
     SPRITE_BLINKY,
@@ -301,22 +301,22 @@ typedef enum {
 // ghost AI states
 typedef enum {
     GHOSTSTATE_NONE,
-    GHOSTSTATE_CHASE,
-    GHOSTSTATE_SCATTER,
-    GHOSTSTATE_FRIGHTENED,
-    GHOSTSTATE_EYES,
-    GHOSTSTATE_HOUSE,
-    GHOSTSTATE_LEAVEHOUSE,
-    GHOSTSTATE_ENTERHOUSE
+    GHOSTSTATE_CHASE,           // currently chasing Pacman
+    GHOSTSTATE_SCATTER,         // currently heading to the corner scatter targets
+    GHOSTSTATE_FRIGHTENED,      // frightened after Pacman has eaten an energizer pill
+    GHOSTSTATE_EYES,            // eaten by Pacman and heading back to the ghost house
+    GHOSTSTATE_HOUSE,           // currently inside the ghost house
+    GHOSTSTATE_LEAVEHOUSE,      // currently leaving the ghost house
+    GHOSTSTATE_ENTERHOUSE       // currently entering the ghost house
 } ghoststate_t;
 
 // reasons why game loop is frozen
 typedef enum {
-    FREEZETYPE_PRELUDE   = (1<<0),  // game prelude is active
-    FREEZETYPE_READY     = (1<<1),  // READY! phase is active
+    FREEZETYPE_PRELUDE   = (1<<0),  // game prelude is active (with the game start tune playing)
+    FREEZETYPE_READY     = (1<<1),  // READY! phase is active (at start of a new game round)
     FREEZETYPE_EAT_GHOST = (1<<2),  // Pacman has eaten a ghost
-    FREEZETYPE_DEAD      = (1<<3),  // Pacman was eaten by ghost
-    FREEZETYPE_WON       = (1<<4),  // game round was won
+    FREEZETYPE_DEAD      = (1<<3),  // Pacman was eaten by a ghost
+    FREEZETYPE_WON       = (1<<4),  // game round was won by eating all dots
 } freezetype_t;
 
 // a trigger holds a specific game-tick when an action should be started
@@ -332,8 +332,8 @@ typedef struct {
 
 // common state for pacman and ghosts
 typedef struct {
-    dir_t dir;
-    int2_t pos;             // position of sprite midpoint in pixel coords
+    dir_t dir;              // current movement direction
+    int2_t pos;             // position of sprite center in pixel coords
     uint32_t anim_tick;     // incremented when actor moved in current tick
 } actor_t;
 
@@ -341,12 +341,12 @@ typedef struct {
 typedef struct {
     actor_t actor;
     ghosttype_t type;
-    dir_t next_dir;
-    int2_t target_pos;
+    dir_t next_dir;         // ghost AI looks ahead one tile when deciding movement direction
+    int2_t target_pos;      // current target position in tile coordinates
     ghoststate_t state;
-    trigger_t frightened;
-    trigger_t eaten;
-    uint16_t dot_counter;
+    trigger_t frightened;   // game tick when frightened mode was entered
+    trigger_t eaten;        // game tick when eaten by Pacman
+    uint16_t dot_counter;   // used to decide when to leave the ghost house
     uint16_t dot_limit;
 } ghost_t;
 
@@ -357,20 +357,20 @@ typedef struct {
 
 // the tile- and sprite-renderer's vertex structure
 typedef struct {
-    float x, y;         // screen coords [0..1] as FLOAT2
+    float x, y;         // screen coords [0..1]
     float u, v;         // tile texture coords
-    uint32_t attr;      // x: color code
+    uint32_t attr;      // x: color code, y: opacity (opacity only used for fade effect)
 } vertex_t;
 
 // sprite state
 typedef struct {
-    bool enabled;
+    bool enabled;           // if false sprite is deactivated
     uint8_t tile, color;    // sprite-tile number (0..63), color code
-    bool flipx, flipy;
-    int2_t pos;
+    bool flipx, flipy;      // horizontal/vertical flip
+    int2_t pos;             // pixel position of the sprite's top-left corner
 } sprite_t;
 
-// debug visualization markers
+// debug visualization markers (see DBG_MARKERS)
 typedef struct {
     bool enabled;
     uint8_t tile, color;    // tile and color code
@@ -378,7 +378,7 @@ typedef struct {
 } debugmarker_t;
 
 // callback function prototype for procedural sounds
-typedef void (*sound_func_t)(int slot);
+typedef void (*sound_func_t)(int sound_slot);
 
 // a sound effect description used as param for snd_start()
 typedef struct {
@@ -389,10 +389,10 @@ typedef struct {
     bool looping;           // true to play looping
 } sound_desc_t;
 
-// a sound voice/channel
+// a sound 'hardware' voice
 typedef struct {
     uint32_t counter;   // 20-bit counter, top 5 bits are index into wavetable ROM
-    uint32_t frequency; // 20-bit frequency
+    uint32_t frequency; // 20-bit frequency (added to counter at 96kHz)
     uint8_t waveform;   // 3-bit waveform index
     uint8_t volume;     // 4-bit volume
     float sample_acc;   // current float sample accumulator
@@ -413,10 +413,10 @@ typedef enum {
 typedef struct {
     uint32_t cur_tick;      // current tick counter
     sound_func_t func;      // optional function pointer for prodecural sounds
-    uint32_t num_ticks;     // length of sound effect in 60Hz ticks
-    uint32_t stride;        // number of uint32_t values per tick
+    uint32_t num_ticks;     // length of register dump sound effect in 60Hz ticks
+    uint32_t stride;        // number of uint32_t values per tick (only for register dump effects)
     const uint32_t* data;   // 3 * num_ticks register dump values
-    uint8_t flags;          // combination of soundflag_t
+    uint8_t flags;          // combination of soundflag_t (active voices and looping)
 } sound_t;
 
 // all state is in a single nested struct
@@ -432,12 +432,12 @@ static struct {
 
     // intro state
     struct {
-        trigger_t started;
+        trigger_t started;      // tick when intro-state was started
     } intro;
 
     // game state
     struct {
-        uint32_t xorshift;      // current xorshift random-number-generator state
+        uint32_t xorshift;          // current xorshift random-number-generator state
         uint32_t hiscore;           // hiscore / 10
         trigger_t started;
         trigger_t prelude_started;
@@ -452,12 +452,12 @@ static struct {
         trigger_t fruit_eaten;          // last time Pacman has eaten the bonus fruit
         trigger_t force_leave_house;    // starts when a dot is eaten
         trigger_t fruit_active;         // starts when bonus fruit is shown
-        uint8_t freeze;             // combination of FREEZETYPE_* flags
-        uint8_t round;              // current game round, 0, 1, 2...
-        uint32_t score;             // score / 10
+        uint8_t freeze;                 // combination of FREEZETYPE_* flags
+        uint8_t round;                  // current game round, 0, 1, 2...
+        uint32_t score;                 // score / 10
         int8_t num_lives;
-        uint8_t num_ghosts_eaten;   // number of ghosts easten with current pill
-        uint8_t num_dots_eaten;     // if == NUM_DOTS, Pacman wins the round
+        uint8_t num_ghosts_eaten;       // number of ghosts easten with current pill
+        uint8_t num_dots_eaten;         // if == NUM_DOTS, Pacman wins the round
         bool global_dot_counter_active;     // set to true when Pacman loses a life
         uint8_t global_dot_counter;         // the global dot counter for the ghost-house-logic
         ghost_t ghost[NUM_GHOSTS];
@@ -472,7 +472,7 @@ static struct {
         bool down;
         bool left;
         bool right;
-        bool esc;       // FIXME: only for debugging
+        bool esc;       // only for debugging (see DBG_ESCACPE)
         bool anykey;
     } input;
 
@@ -566,7 +566,7 @@ static const uint8_t fruit_tiles_colors[NUM_FRUITS][3] = {
     { TILE_KEY,         SPRITETILE_KEY,         COLOR_KEY }
 };
 
-// the tiles for displaying the bonus-fruit-score
+// the tiles for displaying the bonus-fruit-score, this is a number built from 4 tiles
 static const uint8_t fruit_score_tiles[NUM_FRUITS][4] = {
     { 0x40, 0x40, 0x40, 0x40 }, // FRUIT_NONE
     { 0x40, 0x81, 0x85, 0x40 }, // FRUIT_CHERRIES: 100
@@ -828,32 +828,32 @@ static levelspec_t levelspec(int round) {
     return levelspec_table[round];
 }
 
-// set a timer to the next game tick
+// set time trigger to the next game tick
 static void start(trigger_t* t) {
     t->tick = state.timing.tick + 1;
 }
 
-// set a timer to a future tick
+// set time trigger to a future tick
 static void start_after(trigger_t* t, uint32_t ticks) {
     t->tick = state.timing.tick + ticks;
 }
 
-// deactivate a timer
+// deactivate a time trigger
 static void disable(trigger_t* t) {
     t->tick = DISABLED_TICKS;
 }
 
-// return a disabled timer
+// return a disabled time trigger
 static trigger_t disabled_timer(void) {
     return (trigger_t) { .tick = DISABLED_TICKS };
 }
 
-// check if a timer is triggered
+// check if a time trigger is triggered
 static bool now(trigger_t t) {
     return t.tick == state.timing.tick;
 }
 
-// return the number of ticks since a timer was triggered
+// return the number of ticks since a time trigger was triggered
 static uint32_t since(trigger_t t) {
     if (state.timing.tick >= t.tick) {
         return state.timing.tick - t.tick;
@@ -863,7 +863,7 @@ static uint32_t since(trigger_t t) {
     }
 }
 
-// check if a timer is between begin and end tick
+// check if a time trigger is between begin and end tick
 static bool between(trigger_t t, uint32_t begin, uint32_t end) {
     assert((begin >= 0) && (begin < end));
     if (t.tick != DISABLED_TICKS) {
@@ -875,12 +875,12 @@ static bool between(trigger_t t, uint32_t begin, uint32_t end) {
     }
 }
 
-// check if a timer was triggered exactly N ticks ago
+// check if a time trigger was triggered exactly N ticks ago
 static bool after_once(trigger_t t, uint32_t ticks) {
     return since(t) == ticks;
 }
 
-// check if a timer was trigger more then N ticks ago
+// check if a time trigger was triggered more than N ticks ago
 static bool after(trigger_t t, uint32_t ticks) {
     uint32_t s = since(t);
     if (s != DISABLED_TICKS) {
@@ -977,13 +977,13 @@ int2_t dist_to_tile_mid(int2_t pos) {
     return i2((TILE_WIDTH/2) - pos.x % TILE_WIDTH, (TILE_HEIGHT/2) - pos.y % TILE_HEIGHT);
 }
 
-// clear tile buffer
+// clear tile and color buffer
 static void vid_clear(uint8_t tile_code, uint8_t color_code) {
     memset(&state.gfx.video_ram, tile_code, sizeof(state.gfx.video_ram));
     memset(&state.gfx.color_ram, color_code, sizeof(state.gfx.color_ram));
 }
 
-// clear the playfield's tile color
+// clear the playfield's rectangle in the color buffer
 static void vid_color_playfield(uint8_t color_code) {
     for (int y = 3; y < DISPLAY_TILES_Y-2; y++) {
         for (int x = 0; x < DISPLAY_TILES_X; x++) {
@@ -1009,7 +1009,7 @@ static void vid_tile(int2_t tile_pos, uint8_t tile_code) {
     state.gfx.video_ram[tile_pos.y][tile_pos.x] = tile_code;
 }
 
-// put a colored tile into the tile buffer
+// put a colored tile into the tile and color buffers
 static void vid_color_tile(int2_t tile_pos, uint8_t color_code, uint8_t tile_code) {
     assert(valid_tile_pos(tile_pos));
     state.gfx.video_ram[tile_pos.y][tile_pos.x] = tile_code;
@@ -1029,20 +1029,20 @@ static char conv_char(char c) {
     return c;
 }
 
-// put char with color into tile buffer
+// put colored char into tile+color buffers
 static void vid_color_char(int2_t tile_pos, uint8_t color_code, char chr) {
     assert(valid_tile_pos(tile_pos));
     state.gfx.video_ram[tile_pos.y][tile_pos.x] = conv_char(chr);
     state.gfx.color_ram[tile_pos.y][tile_pos.x] = color_code;
 }
 
-// put char without color into tile buffer
+// put char into tile buffer
 static void vid_char(int2_t tile_pos, char chr) {
     assert(valid_tile_pos(tile_pos));
     state.gfx.video_ram[tile_pos.y][tile_pos.x] = conv_char(chr);
 }
 
-// put colored text into the tile buffer
+// put colored text into the tile+color buffers
 static void vid_color_text(int2_t tile_pos, uint8_t color_code, const char* text) {
     assert(valid_tile_pos(tile_pos));
     uint8_t chr;
@@ -1057,7 +1057,7 @@ static void vid_color_text(int2_t tile_pos, uint8_t color_code, const char* text
     }
 }
 
-// put text without color into the tile buffer
+// put text into the tile buffer
 static void vid_text(int2_t tile_pos, const char* text) {
     assert(valid_tile_pos(tile_pos));
     uint8_t chr;
@@ -1072,7 +1072,7 @@ static void vid_text(int2_t tile_pos, const char* text) {
     }
 }
 
-/* print score number into tile buffer from right to left(!),
+/* print colored score number into tile+color buffers from right to left(!),
     scores are /10, the last printed number is always 0, 
     a zero-score will print as '00' (this is the same as on
     the Pacman arcade machine)
@@ -1093,9 +1093,12 @@ static void vid_color_score(int2_t tile_pos, uint8_t color_code, uint32_t score)
     }
 }
 
-/* draw a tile-quad arranged as:
+/* draw a colored tile-quad arranged as:
     |t+1|t+0|
     |t+3|t+2|
+
+   This is (for instance) used to render the current "lives" and fruit
+   symbols at the lower border.
 */
 static void vid_draw_tile_quad(int2_t tile_pos, uint8_t color_code, uint8_t tile_code) {
     for (int yy=0; yy<2; yy++) {
@@ -1106,7 +1109,7 @@ static void vid_draw_tile_quad(int2_t tile_pos, uint8_t color_code, uint8_t tile
     }
 }
 
-// draw the fruit bonus score tiles
+// draw the fruit bonus score tiles (when Pacman has eaten the bonus fruit)
 static void vid_fruit_score(fruit_t fruit_type) {
     assert((fruit_type >= 0) && (fruit_type < NUM_FRUITS));
     uint8_t color_code = (fruit_type == FRUIT_NONE) ? COLOR_DOT : COLOR_FRUIT_SCORE;
@@ -1115,7 +1118,7 @@ static void vid_fruit_score(fruit_t fruit_type) {
     }
 }
 
-// disable and reset all sprites
+// disable and clear all sprites
 static void spr_clear(void) {
     memset(&state.gfx.sprite, 0, sizeof(state.gfx.sprite));
 }
@@ -1180,7 +1183,7 @@ static void spr_anim_ghost(ghosttype_t ghost_type, dir_t dir, uint32_t tick) {
     spr->flipy = false;
 }
 
-// set sprite to animated, frightened ghost
+// set sprite to frightened ghost
 static void spr_anim_ghost_frightened(ghosttype_t ghost_type, uint32_t tick) {
     static const uint8_t tiles[4] = { 28, 29 };
     uint32_t phase = (tick / 4) & 1;
@@ -1241,7 +1244,7 @@ static int2_t dir_to_vec(dir_t dir) {
     return dir_map[dir];
 }
 
-// return the reverse dir for a direction
+// return the reverse direction
 static dir_t reverse_dir(dir_t dir) {
     switch (dir) {
         case DIR_RIGHT: return DIR_LEFT;
@@ -1258,7 +1261,7 @@ static uint8_t tile_code_at(int2_t tile_pos) {
     return state.gfx.video_ram[tile_pos.y][tile_pos.x];
 }
 
-// check if a tile position contains a blocking tile
+// check if a tile position contains a blocking tile (walls and ghost house door)
 static bool is_blocking_tile(int2_t tile_pos) {
     const uint8_t tile_code = tile_code_at(tile_pos);
     return (tile_code >= 0xC0);
@@ -1327,7 +1330,7 @@ static int2_t move(int2_t pos, dir_t dir, bool allow_cornering) {
         }
     }
     
-    // wrap around in the teleport-tunnel
+    // wrap x-position around (only possible in the teleport-tunnel)
     if (pos.x < 0) {
         pos.x = DISPLAY_PIXELS_X - 1;
     }
@@ -1475,13 +1478,14 @@ static void game_round_init(void) {
 
     state.game.active_fruit = FRUIT_NONE;
     state.game.freeze = FREEZETYPE_READY;
-    state.game.xorshift = 0x12345678;
+    state.game.xorshift = 0x12345678;   // random-number-generator seed
     state.game.num_ghosts_eaten = 0;
     game_disable_timers();
 
     vid_color_text(i2(11, 20), 0x9, "READY!");
 
-    // the force-house timer forces ghosts out of the house if Pacman isn't eating dots
+    // the force-house timer forces ghosts out of the house if Pacman isn't
+    // eating dots for a while
     start(&state.game.force_leave_house);
 
     // Pacman starts running to the left
@@ -1560,8 +1564,9 @@ static void game_round_init(void) {
     state.gfx.sprite[SPRITE_CLYDE] = (sprite_t) { .enabled = true, .color = COLOR_CLYDE };
 }
 
+// update dynamic background tiles
 static void game_update_tiles(void) {
-    // score and hiscore
+    // print score and hiscore
     vid_color_score(i2(6,1), COLOR_DEFAULT, state.game.score);
     if (state.game.hiscore > 0) {
         vid_color_score(i2(16,1), COLOR_DEFAULT, state.game.hiscore);
@@ -1578,18 +1583,18 @@ static void game_update_tiles(void) {
         }
     }
 
-    // clear the fruit-eaten score after a little while
+    // clear the fruit-eaten score after Pacman has eaten a bonus fruit
     if (after_once(state.game.fruit_eaten, 2*60)) {
         vid_fruit_score(FRUIT_NONE);
     }
 
-    // lives at bottom left screen
+    // remaining lives at bottom left screen
     for (int i = 0; i < NUM_LIVES; i++) {
         uint8_t color = (i < state.game.num_lives) ? COLOR_PACMAN : 0;
         vid_draw_tile_quad(i2(2+2*i,34), color, TILE_LIFE);
     }
 
-    // draw bonus fruit list in bottom-right corner
+    // bonus fruit list in bottom-right corner
     {
         int16_t x = 24;
         for (int i = ((int)state.game.round - NUM_STATUS_FRUITS + 1); i <= (int)state.game.round; i++) {
@@ -1614,6 +1619,7 @@ static void game_update_tiles(void) {
     }
 }
 
+// this function takes care of updating all sprite images during gameplay
 static void game_update_sprites(void) {
     // update Pacman sprite
     {
@@ -1630,11 +1636,13 @@ static void game_update_sprites(void) {
                 spr->tile = SPRITETILE_PACMAN_CLOSED_MOUTH;
             }
             else if (state.game.freeze & FREEZETYPE_DEAD) {
+                // play the Pacman-death-animation after a short pause
                 if (after(state.game.pacman_eaten, PACMAN_EATEN_TICKS)) {
                     spr_anim_pacman_death(since(state.game.pacman_eaten) - PACMAN_EATEN_TICKS);
                 }
             }
             else {
+                // regular Pacman animation
                 spr_anim_pacman(actor->dir, actor->anim_tick);
             }
         }
@@ -1646,7 +1654,7 @@ static void game_update_sprites(void) {
         if (sprite->enabled) {
             const ghost_t* ghost = &state.game.ghost[i];
             sprite->pos = actor_to_sprite_pos(ghost->actor.pos);
-            // if Pacman has just died, ghosts are switched to invisible
+            // if Pacman has just died, hide ghosts
             if (state.game.freeze & FREEZETYPE_DEAD) {
                 if (after(state.game.pacman_eaten, PACMAN_EATEN_TICKS)) {
                     sprite->tile = SPRITETILE_INVISIBLE;
@@ -1659,32 +1667,39 @@ static void game_update_sprites(void) {
             else switch (ghost->state) {
                 case GHOSTSTATE_EYES:
                     if (before(ghost->eaten, GHOST_EATEN_FREEZE_TICKS)) {
-                        // show the ghost-eaten-score, sprite index 40 is the '200'
-                        // sprite image, followed by '400', '800' and '1600'
+                        // if the ghost was *just* eaten by Pacman, the ghost's sprite
+                        // is replaced with a score number for a short time
+                        // (200 for the first ghost, followed by 400, 800 and 1600)
                         sprite->tile = SPRITETILE_SCORE_200 + state.game.num_ghosts_eaten - 1;
                         sprite->color = COLOR_GHOST_SCORE;
                     }
                     else {
-                        // show regular moving eyes
+                        // afterwards, the ghost's eyes are shown, heading back to the ghost house
                         spr_anim_ghost_eyes(i, ghost->next_dir);
                     }
                     break;
                 case GHOSTSTATE_ENTERHOUSE:
+                    // ...still show the ghost eyes while entering the ghost house
                     spr_anim_ghost_eyes(i, ghost->actor.dir);
                     break;
                 case GHOSTSTATE_FRIGHTENED:
-                    // FIXME: ghost show the frightened visualization also in the 'house-states'
+                    // when inside the ghost house, show the normal ghost images
+                    // (FIXME: ghost's inside the ghost house also go show the
+                    // frightened appearance when Pacman has eaten an energizer pill)
                     spr_anim_ghost_frightened(i, since(ghost->frightened));
                     break;
                 default:
-                    // NOTE: ghost always indicate early what direction they're going:
+                    // show the regular ghost sprite image, the ghost's
+                    // 'next_dir' is used to visualize the direction the ghost
+                    // is heading to, this has the effect that ghosts already look
+                    // into the direction they will move into one tile ahead
                     spr_anim_ghost(i, ghost->next_dir, ghost->actor.anim_tick);
                     break;
             }
         }
     }
 
-    // bonus fruit (if currently active)
+    // hide or display the currently active bonus fruit
     if (state.game.active_fruit == FRUIT_NONE) {
         spr_fruit()->enabled = false;
     }
@@ -1697,7 +1712,8 @@ static void game_update_sprites(void) {
     }
 }
 
-// return true if Pacman should move in this tick
+// return true if Pacman should move in this tick, when eating dots, Pacman
+// is slightly slower than ghosts, otherwise slightly faster
 static bool game_pacman_should_move(void) {
     if (now(state.game.dot_eaten)) {
         // eating a dot causes Pacman to stop for 1 tick
@@ -1712,10 +1728,9 @@ static bool game_pacman_should_move(void) {
     }
 }
 
-/*
-    return number of pixels a ghost should move this tick (in eyes-state,
-    ghost moves faster than one pixel per tick
-*/
+// return number of pixels a ghost should move this tick, this can't be a simple
+// move/don't move boolean return value, because ghosts in eye state move faster
+// than one pixel per tick
 static int game_ghost_speed(const ghost_t* ghost) {
     assert(ghost);
     switch (ghost->state) {
@@ -1728,13 +1743,15 @@ static int game_ghost_speed(const ghost_t* ghost) {
             return state.timing.tick & 1;
         case GHOSTSTATE_EYES:
         case GHOSTSTATE_ENTERHOUSE:
-            // estimated 1.5x when hollow, Pacman Dossier is silent on this
+            // estimated 1.5x when in eye state, Pacman Dossier is silent on this
             return (state.timing.tick & 1) ? 1 : 2;
         default:
             if (is_tunnel(pixel_to_tile_pos(ghost->actor.pos))) {
+                // move drastically slower when inside tunnel
                 return ((state.timing.tick * 2) % 4) ? 1 : 0;
             }
             else {
+                // otherwise move just a bit slower than Pacman
                 return (state.timing.tick % 7) ? 1 : 0;
             }
     }
@@ -1753,25 +1770,33 @@ static ghoststate_t game_scatter_chase_phase(void) {
     else return GHOSTSTATE_CHASE;
 }
 
-// switches a ghost into new state if needed
+// this function takes care of switching ghosts into a new state, this is one
+// of two important functions of the ghost AI (the other being the target selection
+// function below)
 static void game_update_ghost_state(ghost_t* ghost) {
     assert(ghost);
     ghoststate_t new_state = ghost->state;
     switch (ghost->state) {
         case GHOSTSTATE_EYES:
-            // if the target position has been reached, switch to ENTERHOUSE state
-            // eye state moves 2 pixels per tick, so we need to be a bit fuzzy
-            // when checking the target position
+            // When in eye state (heading back to the ghost house), check if the
+            // target position in fron of the ghost house has been reached, then
+            // switch into ENTERHOUSE state. Since ghosts in eye state move faster
+            // than one pixel per tick, do a fuzzy comparison with the target pos
             if (nearequal_i2(ghost->actor.pos, i2(ANTEPORTAS_X, ANTEPORTAS_Y), 1)) {
                 new_state = GHOSTSTATE_ENTERHOUSE;
             }
             break;
         case GHOSTSTATE_ENTERHOUSE:
+            // Ghosts that enter the ghost house during the gameplay loop immediately
+            // leave the house again after reaching their target position inside the house.
             if (nearequal_i2(ghost->actor.pos, ghost_house_target_pos[ghost->type], 1)) {
                 new_state = GHOSTSTATE_LEAVEHOUSE;
             }
             break;
         case GHOSTSTATE_HOUSE:
+            // Ghosts only remain in the "house state" after a new game round 
+            // has been started. The conditions when ghosts leave the house
+            // are a bit complicated, best to check the Pacman Dossier for the details.
             if (after_once(state.game.force_leave_house, 4*60)) {
                 // if Pacman hasn't eaten dots for 4 seconds, the next ghost
                 // is forced out of the house
@@ -1780,7 +1805,7 @@ static void game_update_ghost_state(ghost_t* ghost) {
                 start(&state.game.force_leave_house);
             }
             else if (state.game.global_dot_counter_active) {
-                // if Pacman has lost a live this round, the global dot counter is used
+                // if Pacman has lost a life this round, the global dot counter is used
                 if ((ghost->type == GHOSTTYPE_PINKY) && (state.game.global_dot_counter == 7)) {
                     new_state = GHOSTSTATE_LEAVEHOUSE;
                 }
@@ -1800,16 +1825,13 @@ static void game_update_ghost_state(ghost_t* ghost) {
             }
             break;
         case GHOSTSTATE_LEAVEHOUSE:
+            // ghosts immediately switch to scatter mode after leaving the ghost house
             if (ghost->actor.pos.y == ANTEPORTAS_Y) {
                 new_state = GHOSTSTATE_SCATTER;
             }
             break;
-        case GHOSTSTATE_FRIGHTENED:
-            if (after(ghost->frightened, levelspec(state.game.round).fright_ticks)) {
-                new_state = game_scatter_chase_phase();
-            }
-            break;
         default:
+            // switch between frightened, scatter and chase mode
             // FIXME: length of frightened period is variable
             if (before(ghost->frightened, levelspec(state.game.round).fright_ticks)) {
                 new_state = GHOSTSTATE_FRIGHTENED;
@@ -1844,15 +1866,21 @@ static void game_update_ghost_state(ghost_t* ghost) {
     }
 }
 
+// updatet the ghost's target position, this is the other important function
+// of the ghost's AI
 static void game_update_ghost_target(ghost_t* ghost) {
     assert(ghost);
     int2_t pos = ghost->target_pos;
     switch (ghost->state) {
         case GHOSTSTATE_SCATTER:
+            // when in scatter mode, each ghost heads to its own scatter
+            // target position in the playfield corners
             assert((ghost->type >= 0) && (ghost->type < NUM_GHOSTS));
             pos = ghost_scatter_targets[ghost->type];
             break;
         case GHOSTSTATE_CHASE:
+            // when in chase mode, each ghost has its own particular
+            // chase behaviour (see the Pacman Dossier for details)
             {
                 const actor_t* pm = &state.game.pacman.actor;
                 const int2_t pm_pos = pixel_to_tile_pos(pm->pos);
@@ -1893,10 +1921,9 @@ static void game_update_ghost_target(ghost_t* ghost) {
             }
             break;
         case GHOSTSTATE_FRIGHTENED:
-            /* in frightened state just select a random target position
-                this has the effect that ghosts in frightened state 
-                move in a random direction at each intersection
-            */
+            // in frightened state just select a random target position
+            // this has the effect that ghosts in frightened state 
+            // move in a random direction at each intersection
             pos = i2(xorshift32() % DISPLAY_TILES_X, xorshift32() % DISPLAY_TILES_Y);
             break;
         case GHOSTSTATE_EYES:
@@ -1909,10 +1936,9 @@ static void game_update_ghost_target(ghost_t* ghost) {
     ghost->target_pos = pos;
 }
 
-/* compute the next ghost direction, return true if resulting movement
-    should always happen regardless of current ghost position or blocking
-    tiles (this special case is used for movement inside the ghost house.
-*/
+// compute the next ghost direction, return true if resulting movement
+// should always happen regardless of current ghost position or blocking
+// tiles (this special case is used for movement inside the ghost house)
 static bool game_update_ghost_dir(ghost_t* ghost) {
     assert(ghost);
     // inside ghost-house, just move up and down
@@ -2019,12 +2045,15 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
     house using a timer.
 */
 static void game_update_ghosthouse_dot_counters(void) {
-    // if a life was lost round, use the global dot counter (this will
-    // be deactivated again after all ghosts left the house)
+    // if the new round was started because Pacman lost a life, use the global
+    // dot counter (this mode will be deactivated again after all ghosts left the
+    // house)
     if (state.game.global_dot_counter_active) {
         state.game.global_dot_counter++;
     }
     else {
+        // otherwise each ghost has his own personal dot counter to decide
+        // when to leave the ghost house
         for (int i = 0; i < NUM_GHOSTS; i++) {
             if (state.game.ghost[i].dot_counter < state.game.ghost[i].dot_limit) {
                 state.game.ghost[i].dot_counter++;
@@ -2034,10 +2063,9 @@ static void game_update_ghosthouse_dot_counters(void) {
     }
 }
 
-/* called when a dot or pill has been eaten, checks if a round has been won
-    (all dots and pills eaten), whether to show the bonus fruit, and finally
-    plays the dot-eaten sound effect
-*/
+// called when a dot or pill has been eaten, checks if a round has been won
+// (all dots and pills eaten), whether to show the bonus fruit, and finally
+// plays the dot-eaten sound effect
 static void game_update_dots_eaten(void) {
     state.game.num_dots_eaten++;
     if (state.game.num_dots_eaten == NUM_DOTS) {
@@ -2049,6 +2077,8 @@ static void game_update_dots_eaten(void) {
         // at 70 and 170 dots, show the bonus fruit
         start(&state.game.fruit_active);
     }
+
+    // play alternating crunch sound effect when a dot has been eaten
     if (state.game.num_dots_eaten & 1) {
         snd_start(2, &snd_eatdot1);
     }
@@ -2057,6 +2087,7 @@ static void game_update_dots_eaten(void) {
     }
 }
 
+// the central Pacman and ghost behaviour function, called once per game tick
 static void game_update_actors(void) {
     // Pacman "AI"
     if (game_pacman_should_move()) {
@@ -2068,7 +2099,7 @@ static void game_update_actors(void) {
         if (can_move(actor->pos, wanted_dir, allow_cornering)) {
             actor->dir = wanted_dir;
         }
-        // move into the current direction
+        // move into the selected direction
         if (can_move(actor->pos, actor->dir, allow_cornering)) {
             actor->pos = move(actor->pos, actor->dir, allow_cornering);
             actor->anim_tick++;
@@ -2112,6 +2143,7 @@ static void game_update_actors(void) {
             const int2_t ghost_tile_pos = pixel_to_tile_pos(ghost->actor.pos);
             if (equal_i2(tile_pos, ghost_tile_pos)) {
                 if (ghost->state == GHOSTSTATE_FRIGHTENED) {
+                    // Pacman eats a frightened ghost
                     ghost->state = GHOSTSTATE_EYES;
                     start(&ghost->eaten);
                     start(&state.game.ghost_eaten);
@@ -2122,12 +2154,12 @@ static void game_update_actors(void) {
                     snd_start(2, &snd_eatghost);
                 }
                 else if ((ghost->state == GHOSTSTATE_CHASE) || (ghost->state == GHOSTSTATE_SCATTER)) {
-                    // Pacman dies
+                    // otherwise, ghost eats Pacman, Pacman loses a life
                     #if !DBG_GODMODE
                     snd_clear();
                     start(&state.game.pacman_eaten);
                     state.game.freeze |= FREEZETYPE_DEAD;
-                    // start a new round after Pacman-death-sequence has completed, or start game-over sequence
+                    // if Pacman has any lives left start a new round, otherwise start the game-over sequence
                     if (state.game.num_lives > 0) {
                         start_after(&state.game.ready_started, PACMAN_EATEN_TICKS+PACMAN_DEATH_TICKS);
                     }
@@ -2145,7 +2177,9 @@ static void game_update_actors(void) {
         ghost_t* ghost = &state.game.ghost[ghost_index];
         // handle ghost-state transitions
         game_update_ghost_state(ghost);
+        // update the ghost's target position
         game_update_ghost_target(ghost);
+        // finally, move the ghost towards the current target position
         const int num_move_ticks = game_ghost_speed(ghost);
         for (int i = 0; i < num_move_ticks; i++) {
             bool force_move = game_update_ghost_dir(ghost);
@@ -2159,6 +2193,7 @@ static void game_update_actors(void) {
     }
 }
 
+// the central game tick function, called at 60 Hz
 static void game_tick(void) {
     // debug: skip prelude
     #if DBG_SKIP_PRELUDE
@@ -2213,6 +2248,8 @@ static void game_tick(void) {
         snd_start(2, &snd_dead);
     }
 
+    // the actually important part: update Pacman and ghosts, update dynamic
+    // background tiles, and update the sprite images
     if (!state.game.freeze) {
         game_update_actors();
     }

@@ -1683,7 +1683,7 @@ static void game_update_sprites(void) {
                     break;
                 case GHOSTSTATE_FRIGHTENED:
                     // when inside the ghost house, show the normal ghost images
-                    // (FIXME: ghost's inside the ghost house also go show the
+                    // (FIXME: ghost's inside the ghost house also show the
                     // frightened appearance when Pacman has eaten an energizer pill)
                     spr_anim_ghost_frightened(i, since(ghost->frightened));
                     break;

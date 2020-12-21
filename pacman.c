@@ -638,7 +638,6 @@ static const sound_desc_t snd_dead = {
     .ptr = snd_dump_dead,
     .size = sizeof(snd_dump_dead),
     .voice = { false, false, true }
-
 };
 
 static const sound_desc_t snd_eatdot1 = {

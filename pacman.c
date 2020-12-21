@@ -125,10 +125,10 @@
         // start fading out now, after one second (60 ticks) start a new
         // game round, and fade in, after another second when fadein has 
         // finished, start the actual game loop
-        start(&state.gfx.fadein);
+        start(&state.gfx.fadeout);
         start_after(&state.game.started, 60);
-        start_after(&state.gfx.fadeout, 60);
-        start_after(&state.game.ready_started, 2*60);
+        start_after(&state.gfx.fadein, 60);
+        start_after(&state.game.gameloop_started, 2*60);
 
     As I said above, there's a whole little function vocabulary built around
     time triggers, but those are hopefully all self-explanatory.

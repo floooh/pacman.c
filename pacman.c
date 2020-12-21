@@ -20,9 +20,9 @@
     code bases written by small teams allow a different organizational
     approach than large code bases written by large teams.
 
-    So here are some of those "extremist" methods used in this tiny project:
+    Here are some of those "extremist" methods used in this tiny project:
     
-    Instead of artifically splitting the code into many small source files,
+    Instead of artificially splitting the code into many small source files,
     everything is in a single source file readable from top to bottom.
 
     Instead of data-encapsulation and -hiding, all data lives in a single,

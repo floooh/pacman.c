@@ -433,7 +433,6 @@ static struct {
     // intro state
     struct {
         trigger_t started;
-        trigger_t chase;
     } intro;
 
     // game state
@@ -2284,7 +2283,6 @@ static void intro_tick(void) {
         }
         vid_text(i2(7,5),  "CHARACTER / NICKNAME");
         vid_text(i2(3,35), "CREDIT  0");
-        disable(&state.intro.chase);
     }
 
     // draw the animated 'ghost image.. name.. nickname' lines

@@ -47,14 +47,11 @@
     Pacman arcade machine emulator, some intended, some not
     (https://floooh.github.io/tiny8bit/pacman.html):
 
-        - Ghost behaviour differs at the start of a round, for instance Blinky
-          heads straight to his scatter target, while on the arcade machine,
-          Blinky seems to be in chase mode for one or two seconds before 
-          switching to scatter mode.
         - The attract mode animation in the intro screen is missing (where
           Pacman is chased by ghosts, eats a pill and then hunts the ghost).
         - Likewise, the 'interlude' animation between levels is missing.
-        - Pacman and ghost speeds don't increase in later maps.
+        - Various difficulty-related differences in later maps are ignored
+          (such a faster movement speed, smaller dot-counter-limits for ghosts etc)
 
     The rendering and audio code resembles the original Pacman arcade machine
     hardware:
@@ -1281,7 +1278,14 @@ static bool is_tunnel(int2_t tile_pos) {
     return (tile_pos.y == 17) && ((tile_pos.x <= 5) || (tile_pos.x >= 22));
 }
 
-// test if movement from a pixel position in a wanted direction is possible 
+// check if a position is in the ghost's red zone, where upward movement is forbidden
+// (see Pacman Dossier "Areas To Exploit")
+static bool is_redzone(int2_t tile_pos) {
+    return ((tile_pos.x >= 11) && (tile_pos.x <= 16) && ((tile_pos.y == 14) || (tile_pos.y == 26)));
+}
+
+// test if movement from a pixel position in a wanted direction is possible,
+// allow_cornering is Pacman's feature to take a diagonal shortcut around corners
 static bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering) {
     const int2_t dir_vec = dir_to_vec(wanted_dir);
     const int2_t dist_mid = dist_to_tile_mid(pos);
@@ -1831,7 +1835,6 @@ static void game_update_ghost_state(ghost_t* ghost) {
             break;
         default:
             // switch between frightened, scatter and chase mode
-            // FIXME: length of frightened period is variable
             if (before(ghost->frightened, levelspec(state.game.round).fright_ticks)) {
                 new_state = GHOSTSTATE_FRIGHTENED;
             }
@@ -2012,6 +2015,11 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
             int dist = 0;
             for (int i = 0; i < NUM_DIRS; i++) {
                 const dir_t dir = dirs[i];
+                // if ghost is in one of the two 'red zones', forbid upward movement
+                // (see Pacman Dossier "Areas To Exploit")
+                if (is_redzone(lookahead_pos) && (dir == DIR_UP)) {
+                    continue;
+                }
                 const dir_t revdir = reverse_dir(dir);
                 const int2_t test_pos = clamped_tile_pos(add_i2(lookahead_pos, dir_to_vec(dir)));
                 if ((revdir != ghost->actor.dir) && !is_blocking_tile(test_pos)) {

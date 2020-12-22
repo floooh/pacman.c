@@ -1185,7 +1185,7 @@ static void spr_anim_ghost_frightened(ghosttype_t ghost_type, uint32_t tick) {
     uint32_t phase = (tick / 4) & 1;
     sprite_t* spr = spr_ghost(ghost_type);
     spr->tile = tiles[phase];
-    if (tick > (levelspec(state.game.round).fright_ticks - 60)) {
+    if (tick > (uint32_t)(levelspec(state.game.round).fright_ticks - 60)) {
         // towards end of frightening period, start blinking
         spr->color = (tick & 0x10) ? COLOR_FRIGHTENED : COLOR_FRIGHTENED_BLINKING;
     }
@@ -3082,7 +3082,7 @@ static void snd_sample_tick(void) {
             voice->sample_acc = voice->sample_div = 0.0f;
         }
     }
-    state.audio.sample_buffer[state.audio.num_samples++] = sm * 0.333 * AUDIO_VOLUME;
+    state.audio.sample_buffer[state.audio.num_samples++] = sm * 0.333333f * AUDIO_VOLUME;
     if (state.audio.num_samples == NUM_SAMPLES) {
         saudio_push(state.audio.sample_buffer, state.audio.num_samples);
         state.audio.num_samples = 0;

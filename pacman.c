@@ -2017,7 +2017,7 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
                 const dir_t dir = dirs[i];
                 // if ghost is in one of the two 'red zones', forbid upward movement
                 // (see Pacman Dossier "Areas To Exploit")
-                if (is_redzone(lookahead_pos) && (dir == DIR_UP)) {
+                if (is_redzone(lookahead_pos) && (dir == DIR_UP) && (ghost->state != GHOSTSTATE_EYES)) {
                     continue;
                 }
                 const dir_t revdir = reverse_dir(dir);

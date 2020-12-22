@@ -35,7 +35,9 @@ On Windows, the executable is in a subdirectory:
 Debug/pacman.exe
 ```
 
-## Build and Run WASM/HTML version via Emscripten (Linux, macOS)
+## Build and Run WASM/HTML version via Emscripten
+
+> NOTE: You'll run into various problems running the Emscripten SDK tools on Windows, might be better to run this stuff in WSL.
 
 Setup the emscripten SDK as described here:
 
@@ -48,7 +50,7 @@ And then in the pacman.c directory:
 ```
 mkdir build
 cd build
-emcmake cmake -DCMAKE_BUILD_TYPE=MinSizeRel ..
+emcmake cmake -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=MinSizeRel ..
 cmake --build .
 ```
 
@@ -57,9 +59,6 @@ To run the compilation result in the system web browser:
 ```
 > emrun pacman.html
 ```
-
-(this procedure should also work on Windows with ```make``` in the path, but
-is currently untested)
 
 ## IDE Support
 

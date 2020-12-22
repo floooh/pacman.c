@@ -1259,8 +1259,7 @@ static uint8_t tile_code_at(int2_t tile_pos) {
 
 // check if a tile position contains a blocking tile (walls and ghost house door)
 static bool is_blocking_tile(int2_t tile_pos) {
-    const uint8_t tile_code = tile_code_at(tile_pos);
-    return (tile_code >= 0xC0);
+    return tile_code_at(tile_pos) >= 0xC0;
 }
 
 // check if a tile position contains a dot tile

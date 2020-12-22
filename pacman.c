@@ -3179,6 +3179,7 @@ static void snd_start(int slot, const sound_desc_t* desc) {
         snd->func = desc->func;
     }
     else {
+        assert(num_voices > 0);
         assert((desc->size % (num_voices*sizeof(uint32_t))) == 0);
         snd->stride = num_voices;
         snd->num_ticks = desc->size / (snd->stride*sizeof(uint32_t));

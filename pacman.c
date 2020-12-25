@@ -2841,14 +2841,14 @@ static void gfx_shutdown(void) {
     sg_shutdown();
 }
 
-static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code, uint8_t fade) {
+static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_code, uint8_t opacity) {
     assert(state.gfx.num_vertices < MAX_VERTICES);
     vertex_t* vtx = &state.gfx.vertices[state.gfx.num_vertices++];
     vtx->x = x;
     vtx->y = y;
     vtx->u = u;
     vtx->v = v;
-    vtx->attr = (fade<<8) | color_code;
+    vtx->attr = (opacity<<8) | color_code;
 }
 
 static void gfx_add_tile_vertices(uint32_t tx, uint32_t ty, uint8_t tile_code, uint8_t color_code) {

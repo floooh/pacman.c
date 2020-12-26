@@ -1427,6 +1427,7 @@ static void game_disable_timers(void) {
     disable(&state.game.pacman_eaten);
     disable(&state.game.fruit_eaten);
     disable(&state.game.force_leave_house);
+    disable(&state.game.fruit_active);
 }
 
 // one-time init at start of game state

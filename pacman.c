@@ -1453,7 +1453,7 @@ static void game_init(void) {
 static void game_round_init(void) {
     spr_clear();
 
-    // clear the "READY!" text
+    // clear the "PLAYER ONE" text
     vid_color_text(i2(9,14), 0x10, "          ");
 
     /* if a new round was started because Pacman has "won" (eaten all dots),

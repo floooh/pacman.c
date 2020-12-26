@@ -183,7 +183,7 @@ enum {
     ANTEPORTAS_Y        = 14*TILE_HEIGHT + TILE_HEIGHT/2,
     GHOST_EATEN_FREEZE_TICKS = 60,  // number of ticks the game freezes after Pacman eats a ghost
     PACMAN_EATEN_TICKS  = 60,       // number of ticks to freeze game when Pacman is eaten
-    PACMAN_DEATH_TICKS  = 150,      // number of ticks to show the Pacman sequence before starting new round
+    PACMAN_DEATH_TICKS  = 150,      // number of ticks to show the Pacman death sequence before starting new round
     GAMEOVER_TICKS      = 3*60,     // number of ticks the game over message is shown
     ROUNDWON_TICKS      = 4*60,     // number of ticks to wait after a round was won
     FRUITACTIVE_TICKS   = 10*60,    // number of ticks a bonus fruit is shown
@@ -814,7 +814,6 @@ static uint32_t xorshift32(void) {
     x ^= x<<5;
     return state.game.xorshift = x;
 }
-
 // get level spec for a game round
 static levelspec_t levelspec(int round) {
     assert(round >= 0);

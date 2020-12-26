@@ -861,7 +861,7 @@ static uint32_t since(trigger_t t) {
 
 // check if a time trigger is between begin and end tick
 static bool between(trigger_t t, uint32_t begin, uint32_t end) {
-    assert((begin >= 0) && (begin < end));
+    assert(begin < end);
     if (t.tick != DISABLED_TICKS) {
         uint32_t ticks = since(t);
         return (ticks >= begin) && (ticks < end);

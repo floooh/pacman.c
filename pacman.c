@@ -1867,7 +1867,7 @@ static void game_update_ghost_state(ghost_t* ghost) {
     }
 }
 
-// updatet the ghost's target position, this is the other important function
+// update the ghost's target position, this is the other important function
 // of the ghost's AI
 static void game_update_ghost_target(ghost_t* ghost) {
     assert(ghost);

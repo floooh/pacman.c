@@ -7,6 +7,10 @@ A Pacman clone written in C99 with minimal dependencies for Windows, macOS, Linu
 For implementation details see comments in the pacman.c source file (I've tried
 to structure the source code so that it can be read from top to bottom).
 
+Related projects:
+
+- Zig version: https://github.com/floooh/pacman.zig
+
 ## Clone, Build and Run (Linux, macOS, Windows)
 
 On the command line:

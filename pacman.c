@@ -383,7 +383,6 @@ typedef struct {
     const uint32_t* ptr;    // pointer to register dump data (if a register-dump sound)
     uint32_t size;          // byte size of register dump data
     bool voice[3];          // true to activate voice
-    bool looping;           // true to play looping
 } sound_desc_t;
 
 // a sound 'hardware' voice
@@ -401,8 +400,6 @@ typedef enum {
     SOUNDFLAG_VOICE0 = (1<<0),
     SOUNDFLAG_VOICE1 = (1<<1),
     SOUNDFLAG_VOICE2 = (1<<2),
-    SOUNDFLAG_LOOPING = (1<<3),
-
     SOUNDFLAG_ALL_VOICES = (1<<0)|(1<<1)|(1<<2)
 } soundflag_t;
 
@@ -413,7 +410,7 @@ typedef struct {
     uint32_t num_ticks;     // length of register dump sound effect in 60Hz ticks
     uint32_t stride;        // number of uint32_t values per tick (only for register dump effects)
     const uint32_t* data;   // 3 * num_ticks register dump values
-    uint8_t flags;          // combination of soundflag_t (active voices and looping)
+    uint8_t flags;          // combination of soundflag_t (active voices)
 } sound_t;
 
 // all state is in a single nested struct
@@ -3120,17 +3117,9 @@ static void snd_tick(void) {
         else if (snd->flags & SOUNDFLAG_ALL_VOICES) {
             // register-dump sound effect
             assert(snd->data);
-            // sound finished or looping?
             if (snd->cur_tick == snd->num_ticks) {
-                if (snd->flags & SOUNDFLAG_LOOPING) {
-                    // looping, wrap around
-                    snd->cur_tick = 0;
-                }
-                else {
-                    // not looping, stop the sound
-                    snd_stop(sound_slot);
-                    continue;
-                }
+                snd_stop(sound_slot);
+                continue;
             }
 
             // decode register dump values into voice 'registers'
@@ -3166,7 +3155,6 @@ static void snd_start(int slot, const sound_desc_t* desc) {
 
     sound_t* snd = &state.audio.sound[slot];
     *snd = (sound_t) { 0 };
-    snd->flags = desc->looping ? SOUNDFLAG_LOOPING : 0;
     int num_voices = 0;
     for (int i = 0; i < NUM_VOICES; i++) {
         if (desc->voice[i]) {
@@ -3205,7 +3193,7 @@ static void snd_stop(int slot) {
 // procedural sound effects
 static void snd_func_eatdot1(int slot) {
     assert((slot >= 0) && (slot < NUM_SOUNDS));
-    sound_t* snd = &state.audio.sound[slot];
+    const sound_t* snd = &state.audio.sound[slot];
     voice_t* voice = &state.audio.voice[2];
     if (snd->cur_tick == 0) {
         voice->volume = 12;
@@ -3222,7 +3210,7 @@ static void snd_func_eatdot1(int slot) {
 
 static void snd_func_eatdot2(int slot) {
     assert((slot >= 0) && (slot < NUM_SOUNDS));
-    sound_t* snd = &state.audio.sound[slot];
+    const sound_t* snd = &state.audio.sound[slot];
     voice_t* voice = &state.audio.voice[2];
     if (snd->cur_tick == 0) {
         voice->volume = 12;
@@ -3239,7 +3227,7 @@ static void snd_func_eatdot2(int slot) {
 
 static void snd_func_eatghost(int slot) {
     assert((slot >= 0) && (slot < NUM_SOUNDS));
-    sound_t* snd = &state.audio.sound[slot];
+    const sound_t* snd = &state.audio.sound[slot];
     voice_t* voice = &state.audio.voice[2];
     if (snd->cur_tick == 0) {
         voice->volume = 12;
@@ -3256,7 +3244,7 @@ static void snd_func_eatghost(int slot) {
 
 static void snd_func_eatfruit(int slot) {
     assert((slot >= 0) && (slot < NUM_SOUNDS));
-    sound_t* snd = &state.audio.sound[slot];
+    const sound_t* snd = &state.audio.sound[slot];
     voice_t* voice = &state.audio.voice[2];
     if (snd->cur_tick == 0) {
         voice->volume = 15;
@@ -3276,7 +3264,7 @@ static void snd_func_eatfruit(int slot) {
 
 static void snd_func_weeooh(int slot) {
     assert((slot >= 0) && (slot < NUM_SOUNDS));
-    sound_t* snd = &state.audio.sound[slot];
+    const sound_t* snd = &state.audio.sound[slot];
     voice_t* voice = &state.audio.voice[1];
     if (snd->cur_tick == 0) {
         voice->volume = 6;
@@ -3293,7 +3281,7 @@ static void snd_func_weeooh(int slot) {
 
 static void snd_func_frightened(int slot) {
     assert((slot >= 0) && (slot < NUM_SOUNDS));
-    sound_t* snd = &state.audio.sound[slot];
+    const sound_t* snd = &state.audio.sound[slot];
     voice_t* voice = &state.audio.voice[1];
     if (snd->cur_tick == 0) {
         voice->volume = 10;

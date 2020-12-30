@@ -434,7 +434,6 @@ static struct {
         uint32_t xorshift;          // current xorshift random-number-generator state
         uint32_t hiscore;           // hiscore / 10
         trigger_t started;
-        trigger_t prelude_started;
         trigger_t ready_started;
         trigger_t round_started;
         trigger_t round_won;
@@ -2208,7 +2207,6 @@ static void game_tick(void) {
     // initialize game state once
     if (now(state.game.started)) {
         start(&state.gfx.fadein);
-        start(&state.game.prelude_started);
         start_after(&state.game.ready_started, 2*prelude_ticks_per_sec);
         snd_start(0, &snd_prelude);
         game_init();

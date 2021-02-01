@@ -2386,7 +2386,7 @@ static void intro_tick(void) {
 static void gfx_create_resources(void) {
     // pass action for clearing the background to black
     state.gfx.pass_action = (sg_pass_action) {
-        .colors[0] = { .action = SG_ACTION_CLEAR, .val = { 0.0f, 0.0f, 0.0f, 1.0f } }
+        .colors[0] = { .action = SG_ACTION_CLEAR, .value = { 0.0f, 0.0f, 0.0f, 1.0f } }
     };
 
     // create a dynamic vertex buffer for the tile and sprite quads
@@ -2399,8 +2399,7 @@ static void gfx_create_resources(void) {
     // create a simple quad vertex buffer for rendering the offscreen render target to the display
     float quad_verts[]= { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f };
     state.gfx.display.quad_vbuf = sg_make_buffer(&(sg_buffer_desc){
-        .size = sizeof(quad_verts),
-        .content = quad_verts,
+        .data = SG_RANGE(quad_verts)
     });
 
     // shader sources for all platforms (FIXME: should we use precompiled shader blobs instead?)
@@ -2623,8 +2622,8 @@ static void gfx_create_resources(void) {
             },
             .vs.source = offscreen_vs_src,
             .fs = {
-                .images[0] = { .name="tile_tex", .type = SG_IMAGETYPE_2D },
-                .images[1] = { .name="pal_tex", .type = SG_IMAGETYPE_2D },
+                .images[0] = { .name="tile_tex", .image_type = SG_IMAGETYPE_2D },
+                .images[1] = { .name="pal_tex", .image_type = SG_IMAGETYPE_2D },
                 .source = offscreen_fs_src
             }
         }),
@@ -2635,12 +2634,14 @@ static void gfx_create_resources(void) {
                 [2].format = SG_VERTEXFORMAT_UBYTE4N,
             }
         },
-        .blend = {
-            .enabled = true,
-            .color_format = SG_PIXELFORMAT_RGBA8,
-            .depth_format = SG_PIXELFORMAT_NONE,
-            .src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
-            .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+        .depth.pixel_format = SG_PIXELFORMAT_NONE,
+        .colors[0] = {
+            .pixel_format = SG_PIXELFORMAT_RGBA8,
+            .blend = {
+                .enabled = true,
+                .src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
+                .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+            }
         }
     });
     
@@ -2650,7 +2651,7 @@ static void gfx_create_resources(void) {
             .attrs[0] = { .name="pos", .sem_name="POSITION" },
             .vs.source = display_vs_src,
             .fs = {
-                .images[0] = { .name = "tex", .type = SG_IMAGETYPE_2D },
+                .images[0] = { .name = "tex", .image_type = SG_IMAGETYPE_2D },
                 .source = display_fs_src
             }
         }),
@@ -2684,10 +2685,7 @@ static void gfx_create_resources(void) {
         .mag_filter = SG_FILTER_NEAREST,
         .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
         .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
-        .content.subimage[0][0] = {
-            .ptr = state.gfx.tile_pixels,
-            .size = sizeof(state.gfx.tile_pixels)
-        }
+        .data.subimage[0][0] = SG_RANGE(state.gfx.tile_pixels)
     });
 
     // create the palette texture
@@ -2699,10 +2697,7 @@ static void gfx_create_resources(void) {
         .mag_filter = SG_FILTER_NEAREST,
         .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
         .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
-        .content.subimage[0][0] = {
-            .ptr = state.gfx.color_palette,
-            .size = sizeof(state.gfx.color_palette)
-        }
+        .data.subimage[0][0] = SG_RANGE(state.gfx.color_palette)
     });
 }
 
@@ -3006,7 +3001,7 @@ static void gfx_draw(void) {
         gfx_add_fade_vertices();
     }
     assert(state.gfx.num_vertices <= MAX_VERTICES);
-    sg_update_buffer(state.gfx.offscreen.vbuf, &state.gfx.vertices, state.gfx.num_vertices * sizeof(vertex_t));
+    sg_update_buffer(state.gfx.offscreen.vbuf, &(sg_range){ .ptr=state.gfx.vertices, .size=state.gfx.num_vertices * sizeof(vertex_t) });
 
     // render tiles and sprites into offscreen render target
     sg_begin_pass(state.gfx.offscreen.pass, &state.gfx.pass_action);

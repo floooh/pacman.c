@@ -99,17 +99,17 @@
 
     --- start rendering to the default frame buffer with:
 
-            sg_begin_default_pass(const sg_pass_action* actions, int width, int height)
+            sg_begin_default_pass(const sg_pass_action* action, int width, int height)
 
         ...or alternatively with:
 
-            sg_begin_default_passf(const sg_pass_action* actions, float width, float height)
+            sg_begin_default_passf(const sg_pass_action* action, float width, float height)
 
         ...which takes the framebuffer width and height as float values.
 
     --- or start rendering to an offscreen framebuffer with:
 
-            sg_begin_pass(sg_pass pass, const sg_pass_action* actions)
+            sg_begin_pass(sg_pass pass, const sg_pass_action* action)
 
     --- set the pipeline state for the next draw call with:
 
@@ -2502,7 +2502,8 @@ inline int sg_append_buffer(sg_buffer buf_id, const sg_range& data) { return sg_
 #pragma warning(disable:4115)   /* named type definition in parentheses */
 #pragma warning(disable:4505)   /* unreferenced local function has been removed */
 #pragma warning(disable:4201)   /* nonstandard extension used: nameless struct/union (needed by d3d11.h) */
-#pragma warning(disable:4054)   /* 'type cast': from function pointer 'FARPROC' to data pointer 'void *' */
+#pragma warning(disable:4054)   /* 'type cast': from function pointer */
+#pragma warning(disable:4055)   /* 'type cast': from data pointer */
 #endif
 
 #if defined(SOKOL_GLCORE33) || defined(SOKOL_GLES2) || defined(SOKOL_GLES3)

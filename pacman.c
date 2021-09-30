@@ -10,7 +10,7 @@
 
     A WASM version running in browsers can be found here:
 
-    https://floooh.github.io/tiny8bit/pacman.html
+    https://floooh.github.io/pacman.c/pacman.html
 
     Some basic concepts and ideas are worth explaining upfront:
 

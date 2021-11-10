@@ -1,0 +1,119 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  Linux:
+    runs-on: ubuntu-18.04
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mesa-common-dev libx11-dev libasound2-dev
+
+    - name: Build
+      run: |
+        ls -l
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
+
+    - name: Check Product
+      run: |
+        ls -l
+        ls -l pacman
+        file pacman
+
+    - name: Package Product
+      run: |
+        chmod +x pacman
+        zip -r pacman-linux.zip pacman
+
+    - name: Archive Product
+      uses: actions/upload-artifact@v1
+      with:
+        name: pacman-linux.zip
+        path: pacman-linux.zip
+
+  MacOS:
+    runs-on: macOS-latest
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+
+    # - name: Install Dependencies
+    #   run: |
+    #     brew install glfw3
+
+    - name: Build
+      run: |
+        ls -l
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
+
+    - name: Check Product
+      run: |
+        ls -l
+        ls -l pacman
+        file pacman
+
+    - name: Package Product
+      run: |
+        chmod +x pacman
+        zip -r pacman-mac.zip pacman
+
+    - name: Archive Product
+      uses: actions/upload-artifact@v1
+      with:
+        name: pacman-mac.zip
+        path: pacman-mac.zip
+
+  Emscripten:
+    runs-on: ubuntu-18.04
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+
+    - name: Install Dependencies
+      run: |
+        wget -q https://github.com/emscripten-core/emsdk/archive/master.tar.gz
+        tar -xvf master.tar.gz
+        emsdk-master/emsdk update
+        emsdk-master/emsdk install latest
+        emsdk-master/emsdk activate latest
+
+    - name: Build
+      run: |
+        source emsdk-master/emsdk_env.sh
+        mkdir build
+        cd build
+        emcmake cmake -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=MinSizeRel ..
+        cmake --build .
+
+    - name: Check Product
+      run: |
+        ls -l
+        file pacman.*
+
+    - name: Package Product
+      run: |
+        zip -r pacman-web.zip pacman.html pacman.wasm pacman.js
+
+    - name: Archive Product
+      uses: actions/upload-artifact@v1
+      with:
+        name: pacman-web.zip
+        path: pacman-web.zip

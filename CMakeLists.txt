@@ -28,6 +28,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
         "-framework Cocoa"
         "-framework MetalKit"
         "-framework Metal"
+        "-framework OpenGL"
         "-framework AudioToolbox")
 else()
     if (CMAKE_SYSTEM_NAME STREQUAL Linux)

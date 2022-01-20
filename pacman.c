@@ -133,7 +133,6 @@
 #include "sokol_app.h"
 #include "sokol_gfx.h"
 #include "sokol_audio.h"
-#include "sokol_time.h"
 #include "sokol_glue.h"
 #include <assert.h>
 #include <string.h> // memset()
@@ -713,7 +712,6 @@ sapp_desc sokol_main(int argc, char* argv[]) {
 }
 
 static void init(void) {
-    stm_setup();
     gfx_init();
     snd_init();
 
@@ -728,7 +726,7 @@ static void init(void) {
 static void frame(void) {
 
     // run the game at a fixed tick rate regardless of frame rate
-    uint32_t frame_time_ns = (uint32_t) stm_ns(stm_laptime(&state.timing.laptime_store));
+    uint32_t frame_time_ns = (uint32_t) (sapp_frame_duration() * 1000000000.0);
     // clamp max frame time (so the timing isn't messed up when stopping in the debugger)
     if (frame_time_ns > 33333333) {
         frame_time_ns = 33333333;

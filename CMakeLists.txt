@@ -1,9 +1,6 @@
 cmake_minimum_required(VERSION 3.0)
 project(pacman)
 set(CMAKE_C_STANDARD 11)
-if (CMAKE_SYSTEM_NAME STREQUAL Emscripten)
-    set(CMAKE_EXECUTABLE_SUFFIX ".html")
-endif()
 
 # Linux -pthread shenanigans
 if (CMAKE_SYSTEM_NAME STREQUAL Linux)
@@ -17,7 +14,6 @@ set(SOKOL_HEADERS
     sokol/sokol_gfx.h
     sokol/sokol_app.h
     sokol/sokol_audio.h
-    sokol/sokol_time.h
     sokol/sokol_glue.h)
 add_library(sokol STATIC sokol/sokol.c ${SOKOL_HEADERS})
 if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
@@ -46,6 +42,7 @@ else()
 endif()
 target_link_libraries(pacman sokol)
 if (CMAKE_SYSTEM_NAME STREQUAL Emscripten)
+    set(CMAKE_EXECUTABLE_SUFFIX ".html")
     target_link_options(pacman PUBLIC --shell-file ../sokol/shell.html)
     target_link_options(pacman PUBLIC -sNO_FILESYSTEM=1 -sASSERTIONS=0 -sMALLOC=emmalloc --closure=1)
 endif()

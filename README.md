@@ -66,19 +66,19 @@ To run the compilation result in the system web browser:
 
 ## IDE Support
 
-On Windows, cmake will automatically create a **Visual Studio** solution file which can be opened with the ```start``` command:
+On Windows with Visual Studio cmake will automatically create a **Visual Studio** solution file which can be opened with ```cmake --open .```:
 ```
 cd build
 cmake ..
-start pacman.sln
+cmake --open .
 ```
 
 On macOS, the cmake **Xcode** generator can be used to create an
-Xcode project which can be opened with the ```open``` command:
+Xcode project which can be opened with ```cmake --open .```
 ```
 cd build
 cmake -GXcode ..
-open pacman.xcodeproj
+cmake --open .
 ```
 
 On all platforms with **Visual Studio Code** and the Microsoft C/C++ and

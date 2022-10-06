@@ -1136,7 +1136,7 @@ static void spr_anim_pacman(dir_t dir, uint32_t tick) {
         { 45, 47, 48, 47 }  // vertical (needs flipy)
     };
     sprite_t* spr = spr_pacman();
-    uint32_t phase = (tick / 4) & 3;
+    uint32_t phase = (tick / 2) & 3;
     spr->tile  = tiles[dir & 1][phase];
     spr->color = COLOR_PACMAN;
     spr->flipx = (dir == DIR_LEFT);

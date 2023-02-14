@@ -21,7 +21,7 @@
     approach than large code bases written by large teams.
 
     Here are some of those "extremist" methods used in this tiny project:
-    
+
     Instead of artificially splitting the code into many small source files,
     everything is in a single source file readable from top to bottom.
 
@@ -31,7 +31,7 @@
     while now for all my hobby code). An interesting side effect of this
     upfront-defined static memory layout is that there are no dynamic
     allocations in the entire game code (only a handful allocations during
-    initialization of the Sokol headers). 
+    initialization of the Sokol headers).
 
     Instead of "wasting" time thinking too much about high-level abstractions
     and reusability, the code has been written in a fairly adhoc-manner "from
@@ -64,18 +64,18 @@
           arcade machine, with the only difference that the tile- and color-buffer
           has a straightforward linear memory layout
         - background tile rendering is done with dynamically uploaded vertex
-          data (two triangles per tile), with color-palette decoding done in 
+          data (two triangles per tile), with color-palette decoding done in
           the pixel shader
-        - up to 8 16x16 sprites are rendered as vertex quads, with the same 
+        - up to 8 16x16 sprites are rendered as vertex quads, with the same
           color palette decoding happening in the pixel shader as for background
           tiles.
         - audio output works through an actual Namco WSG emulator which generates
-          sound samples for 3 hardware voices from a 20-bit frequency counter, 
+          sound samples for 3 hardware voices from a 20-bit frequency counter,
           4-bit volume and 3-bit wave type (for 8 wavetables made of 32 sample
           values each stored in a ROM dump)
         - sound effects are implemented by writing new values to the hardware
           voice 'registers' once per 60Hz tick, this can happen in two ways:
-            - as 'procedural' sound effects, where a callback function computes 
+            - as 'procedural' sound effects, where a callback function computes
               the new voice register values
             - or via 'register dump' playback, where the voice register values
               have been captured at 60Hz frequency from an actual Pacman arcade
@@ -120,7 +120,7 @@
     followup-actions in one place:
 
         // start fading out now, after one second (60 ticks) start a new
-        // game round, and fade in, after another second when fadein has 
+        // game round, and fade in, after another second when fadein has
         // finished, start the actual game loop
         start(&state.gfx.fadeout);
         start_after(&state.game.started, 60);
@@ -133,6 +133,7 @@
 #include "sokol_app.h"
 #include "sokol_gfx.h"
 #include "sokol_audio.h"
+#include "sokol_log.h"
 #include "sokol_glue.h"
 #include <assert.h>
 #include <string.h> // memset()
@@ -165,13 +166,13 @@ enum {
     SPRITE_WIDTH        = 16,           // width and height of a sprite in pixels
     SPRITE_HEIGHT       = 16,
     DISPLAY_TILES_X     = 28,           // tile buffer width and height
-    DISPLAY_TILES_Y     = 36, 
+    DISPLAY_TILES_Y     = 36,
     DISPLAY_PIXELS_X    = DISPLAY_TILES_X * TILE_WIDTH,
     DISPLAY_PIXELS_Y    = DISPLAY_TILES_Y * TILE_HEIGHT,
     NUM_SPRITES         = 8,
     NUM_DEBUG_MARKERS   = 16,
     TILE_TEXTURE_WIDTH  = 256 * TILE_WIDTH,
-    TILE_TEXTURE_HEIGHT = TILE_HEIGHT + SPRITE_HEIGHT,  
+    TILE_TEXTURE_HEIGHT = TILE_HEIGHT + SPRITE_HEIGHT,
     MAX_VERTICES        = ((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + NUM_DEBUG_MARKERS) * 6,
     FADE_TICKS          = 30,   // duration of fade-in/out
     NUM_LIVES           = 3,
@@ -707,7 +708,8 @@ sapp_desc sokol_main(int argc, char* argv[]) {
         .event_cb = input,
         .width = DISPLAY_TILES_X * TILE_WIDTH * 2,
         .height = DISPLAY_TILES_Y * TILE_HEIGHT * 2,
-        .window_title = "pacman.c"
+        .window_title = "pacman.c",
+        .logger.func = slog_func,
     };
 }
 
@@ -1062,7 +1064,7 @@ static void vid_text(int2_t tile_pos, const char* text) {
 }
 
 /* print colored score number into tile+color buffers from right to left(!),
-    scores are /10, the last printed number is always 0, 
+    scores are /10, the last printed number is always 0,
     a zero-score will print as '00' (this is the same as on
     the Pacman arcade machine)
 */
@@ -1281,7 +1283,7 @@ static bool is_redzone(int2_t tile_pos) {
 static bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering) {
     const int2_t dir_vec = dir_to_vec(wanted_dir);
     const int2_t dist_mid = dist_to_tile_mid(pos);
-    
+
     // distance to midpoint in move direction and perpendicular direction
     int16_t move_dist_mid, perp_dist_mid;
     if (dir_vec.y != 0) {
@@ -1292,7 +1294,7 @@ static bool can_move(int2_t pos, dir_t wanted_dir, bool allow_cornering) {
         move_dist_mid = dist_mid.x;
         perp_dist_mid = dist_mid.y;
     }
-    
+
     // look one tile ahead in movement direction
     const int2_t tile_pos = pixel_to_tile_pos(pos);
     const int2_t check_pos = clamped_tile_pos(add_i2(tile_pos, dir_vec));
@@ -1324,7 +1326,7 @@ static int2_t move(int2_t pos, dir_t dir, bool allow_cornering) {
             else if (dist_mid.x > 0) { pos.x++; }
         }
     }
-    
+
     // wrap x-position around (only possible in the teleport-tunnel)
     if (pos.x < 0) {
         pos.x = DISPLAY_PIXELS_X - 1;
@@ -1487,7 +1489,7 @@ static void game_round_init(void) {
     // Pacman starts running to the left
     state.game.pacman = (pacman_t) {
         .actor = {
-            .dir = DIR_LEFT, 
+            .dir = DIR_LEFT,
             .pos = { 14*8, 26*8+4 },
         },
     };
@@ -1549,7 +1551,7 @@ static void game_round_init(void) {
             .pos = ghost_starting_pos[GHOSTTYPE_CLYDE],
         },
         .type = GHOSTTYPE_CLYDE,
-        .next_dir = DIR_UP, 
+        .next_dir = DIR_UP,
         .state = GHOSTSTATE_HOUSE,
         .frightened = disabled_timer(),
         .eaten = disabled_timer(),
@@ -1790,7 +1792,7 @@ static void game_update_ghost_state(ghost_t* ghost) {
             }
             break;
         case GHOSTSTATE_HOUSE:
-            // Ghosts only remain in the "house state" after a new game round 
+            // Ghosts only remain in the "house state" after a new game round
             // has been started. The conditions when ghosts leave the house
             // are a bit complicated, best to check the Pacman Dossier for the details.
             if (after_once(state.game.force_leave_house, 4*60)) {
@@ -1901,7 +1903,7 @@ static void game_update_ghost_target(ghost_t* ghost) {
                         }
                         break;
                     case GHOSTTYPE_CLYDE:
-                        // if Clyde is far away from Pacman, he chases Pacman, 
+                        // if Clyde is far away from Pacman, he chases Pacman,
                         // but if close he moves towards the scatter target
                         if (squared_distance_i2(pixel_to_tile_pos(ghost->actor.pos), pm_pos) > 64) {
                             pos = pm_pos;
@@ -1917,7 +1919,7 @@ static void game_update_ghost_target(ghost_t* ghost) {
             break;
         case GHOSTSTATE_FRIGHTENED:
             // in frightened state just select a random target position
-            // this has the effect that ghosts in frightened state 
+            // this has the effect that ghosts in frightened state
             // move in a random direction at each intersection
             pos = i2(xorshift32() % DISPLAY_TILES_X, xorshift32() % DISPLAY_TILES_Y);
             break;
@@ -2028,7 +2030,7 @@ static bool game_update_ghost_dir(ghost_t* ghost) {
 }
 
 /* Update the dot counters used to decide whether ghosts must leave the house.
-    
+
     This is called each time Pacman eats a dot.
 
     Each ghost has a dot limit which is reset at the start of a round. Each time
@@ -2407,7 +2409,7 @@ static void gfx_create_resources(void) {
     const char* display_fs_src = 0;
     switch (sg_query_backend()) {
         case SG_BACKEND_METAL_MACOS:
-            offscreen_vs_src = 
+            offscreen_vs_src =
                 "#include <metal_stdlib>\n"
                 "using namespace metal;\n"
                 "struct vs_in {\n"
@@ -2642,7 +2644,7 @@ static void gfx_create_resources(void) {
             }
         }
     });
-    
+
     // create pipeline and shader for rendering into display
     state.gfx.display.pip = sg_make_pipeline(&(sg_pipeline_desc){
         .shader = sg_make_shader(&(sg_shader_desc){
@@ -2814,14 +2816,15 @@ static void gfx_init(void) {
         .shader_pool_size = 2,
         .pipeline_pool_size = 2,
         .pass_pool_size = 1,
-        .context = sapp_sgcontext()
+        .context = sapp_sgcontext(),
+        .logger.func = slog_func,
     });
     disable(&state.gfx.fadein);
     disable(&state.gfx.fadeout);
     state.gfx.fade = 0xFF;
     spr_clear();
     gfx_decode_tiles();
-    gfx_decode_color_palette(); 
+    gfx_decode_color_palette();
     gfx_create_resources();
 }
 
@@ -3029,7 +3032,9 @@ static void gfx_draw(void) {
 
 /*== AUDIO SUBSYSTEM =========================================================*/
 static void snd_init(void) {
-    saudio_setup(&(saudio_desc){ 0 });
+    saudio_setup(&(saudio_desc){
+        .logger.func = slog_func,
+    });
 
     // compute sample duration in nanoseconds
     int32_t samples_per_sec = saudio_sample_rate();

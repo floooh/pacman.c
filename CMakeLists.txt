@@ -44,7 +44,7 @@ target_link_libraries(pacman sokol)
 if (CMAKE_SYSTEM_NAME STREQUAL Emscripten)
     set(CMAKE_EXECUTABLE_SUFFIX ".html")
     target_link_options(pacman PUBLIC --shell-file ../sokol/shell.html)
-    target_link_options(pacman PUBLIC -sNO_FILESYSTEM=1 -sASSERTIONS=0 -sMALLOC=emmalloc --closure=1)
+    target_link_options(pacman PUBLIC -sUSE_WEBGL2=1 -sNO_FILESYSTEM=1 -sASSERTIONS=0 -sMALLOC=emmalloc --closure=1)
 endif()
 
 # explicitly strip dead code

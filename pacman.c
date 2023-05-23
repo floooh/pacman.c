@@ -2386,7 +2386,7 @@ static void intro_tick(void) {
 static void gfx_create_resources(void) {
     // pass action for clearing the background to black
     state.gfx.pass_action = (sg_pass_action) {
-        .colors[0] = { .action = SG_ACTION_CLEAR, .value = { 0.0f, 0.0f, 0.0f, 1.0f } }
+        .colors[0] = { .load_action = SG_LOADACTION_CLEAR, .clear_value = { 0.0f, 0.0f, 0.0f, 1.0f } }
     };
 
     // create a dynamic vertex buffer for the tile and sprite quads
@@ -2569,7 +2569,7 @@ static void gfx_create_resources(void) {
                 "  frag_color = texture(tex, uv);\n"
                 "}\n";
                 break;
-        case SG_BACKEND_GLES2:
+        case SG_BACKEND_GLES3:
             offscreen_vs_src =
                 "attribute vec4 pos;\n"
                 "attribute vec2 uv_in;\n"

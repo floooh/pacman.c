@@ -505,12 +505,14 @@ static struct {
             sg_image tile_img;
             sg_image palette_img;
             sg_image render_target;
+            sg_sampler sampler;
             sg_pipeline pip;
             sg_pass pass;
         } offscreen;
         struct {
             sg_buffer quad_vbuf;
             sg_pipeline pip;
+            sg_sampler sampler;
         } display;
 
         // intermediate vertex buffer for tile- and sprite-rendering
@@ -2622,8 +2624,17 @@ static void gfx_create_resources(void) {
             },
             .vs.source = offscreen_vs_src,
             .fs = {
-                .images[0] = { .name="tile_tex", .image_type = SG_IMAGETYPE_2D },
-                .images[1] = { .name="pal_tex", .image_type = SG_IMAGETYPE_2D },
+                .images = {
+                    [0] = { .used = true },
+                    [1] = { .used = true },
+                },
+                .samplers = {
+                    [0] = { .used = true }
+                },
+                .image_sampler_pairs = {
+                    [0] = { .used = true, .image_slot = 0, .sampler_slot = 0, .glsl_name = "tile_tex" },
+                    [1] = { .used = true, .image_slot = 1, .sampler_slot = 0, .glsl_name = "pal_tex" },
+                },
                 .source = offscreen_fs_src
             }
         }),
@@ -2651,7 +2662,9 @@ static void gfx_create_resources(void) {
             .attrs[0] = { .name="pos", .sem_name="POSITION" },
             .vs.source = display_vs_src,
             .fs = {
-                .images[0] = { .name = "tex", .image_type = SG_IMAGETYPE_2D },
+                .images[0].used = true,
+                .samplers[0].used = true,
+                .image_sampler_pairs[0] = { .used = true, .image_slot = 0, .sampler_slot = 0, .glsl_name = "tex" },
                 .source = display_fs_src
             }
         }),
@@ -2665,6 +2678,10 @@ static void gfx_create_resources(void) {
         .width = DISPLAY_PIXELS_X * 2,
         .height = DISPLAY_PIXELS_Y * 2,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
+    });
+
+    // create an sampler to render the offscreen render target with linear upscale filtering
+    state.gfx.display.sampler = sg_make_sampler(&(sg_sampler_desc){
         .min_filter = SG_FILTER_LINEAR,
         .mag_filter = SG_FILTER_LINEAR,
         .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
@@ -2681,10 +2698,6 @@ static void gfx_create_resources(void) {
         .width  = TILE_TEXTURE_WIDTH,
         .height = TILE_TEXTURE_HEIGHT,
         .pixel_format = SG_PIXELFORMAT_R8,
-        .min_filter = SG_FILTER_NEAREST,
-        .mag_filter = SG_FILTER_NEAREST,
-        .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
-        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
         .data.subimage[0][0] = SG_RANGE(state.gfx.tile_pixels)
     });
 
@@ -2693,11 +2706,15 @@ static void gfx_create_resources(void) {
         .width = 256,
         .height = 1,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
+        .data.subimage[0][0] = SG_RANGE(state.gfx.color_palette)
+    });
+
+    // create a sampler with nearest filtering for the offscreen pass
+    state.gfx.offscreen.sampler = sg_make_sampler(&(sg_sampler_desc){
         .min_filter = SG_FILTER_NEAREST,
         .mag_filter = SG_FILTER_NEAREST,
         .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
         .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
-        .data.subimage[0][0] = SG_RANGE(state.gfx.color_palette)
     });
 }
 
@@ -3009,8 +3026,13 @@ static void gfx_draw(void) {
     sg_apply_pipeline(state.gfx.offscreen.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.offscreen.vbuf,
-        .fs_images[0] = state.gfx.offscreen.tile_img,
-        .fs_images[1] = state.gfx.offscreen.palette_img,
+        .fs = {
+            .images = {
+                [0] = state.gfx.offscreen.tile_img,
+                [1] = state.gfx.offscreen.palette_img,
+            },
+            .samplers[0] = state.gfx.offscreen.sampler,
+        }
     });
     sg_draw(0, state.gfx.num_vertices, 1);
     sg_end_pass();
@@ -3023,7 +3045,10 @@ static void gfx_draw(void) {
     sg_apply_pipeline(state.gfx.display.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.display.quad_vbuf,
-        .fs_images[0] = state.gfx.offscreen.render_target
+        .fs = {
+            .images[0] = state.gfx.offscreen.render_target,
+            .samplers[0] = state.gfx.display.sampler,
+        }
     });
     sg_draw(0, 4, 1);
     sg_end_pass();

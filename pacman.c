@@ -2629,11 +2629,12 @@ static void gfx_create_resources(void) {
                     [1] = { .used = true },
                 },
                 .samplers = {
-                    [0] = { .used = true }
+                    [0] = { .used = true },
+                    [1] = { .used = true },
                 },
                 .image_sampler_pairs = {
                     [0] = { .used = true, .image_slot = 0, .sampler_slot = 0, .glsl_name = "tile_tex" },
-                    [1] = { .used = true, .image_slot = 1, .sampler_slot = 0, .glsl_name = "pal_tex" },
+                    [1] = { .used = true, .image_slot = 1, .sampler_slot = 1, .glsl_name = "pal_tex" },
                 },
                 .source = offscreen_fs_src
             }
@@ -3032,6 +3033,7 @@ static void gfx_draw(void) {
                 [1] = state.gfx.offscreen.palette_img,
             },
             .samplers[0] = state.gfx.offscreen.sampler,
+            .samplers[1] = state.gfx.offscreen.sampler,
         }
     });
     sg_draw(0, state.gfx.num_vertices, 1);

@@ -149,45 +149,47 @@
 #define DBG_DOUBLE_SPEED    (0)     // set to (1) to speed up game (useful with godmode)
 #define DBG_GODMODE         (0)     // set to (1) to disable dying
 
-enum {
-    // tick duration in nanoseconds
-    #if DBG_DOUBLE_SPEED
-        TICK_DURATION_NS = 8333333,
-    #else
-        TICK_DURATION_NS = 16666666,
-    #endif
-    TICK_TOLERANCE_NS   = 1000000,      // per-frame tolerance in nanoseconds
-    NUM_VOICES          = 3,            // number of sound voices
-    NUM_SOUNDS          = 3,            // max number of sounds effects that can be active at a time
-    NUM_SAMPLES         = 128,          // max number of audio samples in local sample buffer
-    DISABLED_TICKS      = 0xFFFFFFFF,   // magic tick value for a disabled timer
-    TILE_WIDTH          = 8,            // width and height of a background tile in pixels
-    TILE_HEIGHT         = 8,
-    SPRITE_WIDTH        = 16,           // width and height of a sprite in pixels
-    SPRITE_HEIGHT       = 16,
-    DISPLAY_TILES_X     = 28,           // tile buffer width and height
-    DISPLAY_TILES_Y     = 36,
-    DISPLAY_PIXELS_X    = DISPLAY_TILES_X * TILE_WIDTH,
-    DISPLAY_PIXELS_Y    = DISPLAY_TILES_Y * TILE_HEIGHT,
-    NUM_SPRITES         = 8,
-    NUM_DEBUG_MARKERS   = 16,
-    TILE_TEXTURE_WIDTH  = 256 * TILE_WIDTH,
-    TILE_TEXTURE_HEIGHT = TILE_HEIGHT + SPRITE_HEIGHT,
-    MAX_VERTICES        = ((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + NUM_DEBUG_MARKERS) * 6,
-    FADE_TICKS          = 30,   // duration of fade-in/out
-    NUM_LIVES           = 3,
-    NUM_STATUS_FRUITS   = 7,    // max number of displayed fruits at bottom right
-    NUM_DOTS            = 244,  // 240 small dots + 4 pills
-    NUM_PILLS           = 4,    // number of energizer pills on playfield
-    ANTEPORTAS_X        = 14*TILE_WIDTH,  // pixel position of the ghost house enter/leave point
-    ANTEPORTAS_Y        = 14*TILE_HEIGHT + TILE_HEIGHT/2,
-    GHOST_EATEN_FREEZE_TICKS = 60,  // number of ticks the game freezes after Pacman eats a ghost
-    PACMAN_EATEN_TICKS  = 60,       // number of ticks to freeze game when Pacman is eaten
-    PACMAN_DEATH_TICKS  = 150,      // number of ticks to show the Pacman death sequence before starting new round
-    GAMEOVER_TICKS      = 3*60,     // number of ticks the game over message is shown
-    ROUNDWON_TICKS      = 4*60,     // number of ticks to wait after a round was won
-    FRUITACTIVE_TICKS   = 10*60,    // number of ticks a bonus fruit is shown
-};
+// NOTE: DO NOT CHANGE THESE DEFINES TO AN ENUM
+// gcc-13 will turn the backing type into an unsigned integer which then
+// causes all sorts of trouble further down
+
+// tick duration in nanoseconds
+#if DBG_DOUBLE_SPEED
+    #define TICK_DURATION_NS (8333333)
+#else
+    #define TICK_DURATION_NS (16666666)
+#endif
+#define TICK_TOLERANCE_NS    (1000000)      // per-frame tolerance in nanoseconds
+#define NUM_VOICES           (3)            // number of sound voices
+#define NUM_SOUNDS           (3)            // max number of sounds effects that can be active at a time
+#define NUM_SAMPLES          (128)          // max number of audio samples in local sample buffer
+#define DISABLED_TICKS       (0xFFFFFFFF)   // magic tick value for a disabled timer
+#define TILE_WIDTH           (8)            // width and height of a background tile in pixels
+#define TILE_HEIGHT          (8)
+#define SPRITE_WIDTH         (16)           // width and height of a sprite in pixels
+#define SPRITE_HEIGHT        (16)
+#define DISPLAY_TILES_X      (28)           // tile buffer width and height
+#define DISPLAY_TILES_Y      (36)
+#define DISPLAY_PIXELS_X     (DISPLAY_TILES_X * TILE_WIDTH)
+#define DISPLAY_PIXELS_Y     (DISPLAY_TILES_Y * TILE_HEIGHT)
+#define NUM_SPRITES          (8)
+#define NUM_DEBUG_MARKERS    (16)
+#define TILE_TEXTURE_WIDTH   (256 * TILE_WIDTH)
+#define TILE_TEXTURE_HEIGHT  (TILE_HEIGHT + SPRITE_HEIGHT)
+#define MAX_VERTICES         (((DISPLAY_TILES_X * DISPLAY_TILES_Y) + NUM_SPRITES + NUM_DEBUG_MARKERS) * 6)
+#define FADE_TICKS           (30)   // duration of fade-in/out
+#define NUM_LIVES            (3)
+#define NUM_STATUS_FRUITS    (7)    // max number of displayed fruits at bottom right
+#define NUM_DOTS             (244)  // 240 small dots + 4 pills
+#define NUM_PILLS            (4)    // number of energizer pills on playfield
+#define ANTEPORTAS_X         (14*TILE_WIDTH)  // pixel position of the ghost house enter/leave point
+#define ANTEPORTAS_Y         (14*TILE_HEIGHT + TILE_HEIGHT/2)
+#define GHOST_EATEN_FREEZE_TICKS (60)  // number of ticks the game freezes after Pacman eats a ghost
+#define PACMAN_EATEN_TICKS   (60)       // number of ticks to freeze game when Pacman is eaten
+#define PACMAN_DEATH_TICKS   (150)      // number of ticks to show the Pacman death sequence before starting new round
+#define GAMEOVER_TICKS       (3*60)     // number of ticks the game over message is shown
+#define ROUNDWON_TICKS       (4*60)     // number of ticks to wait after a round was won
+#define FRUITACTIVE_TICKS    (10*60)    // number of ticks a bonus fruit is shown
 
 /* common tile, sprite and color codes, these are the same as on the Pacman
    arcade machine and extracted by looking at memory locations of a Pacman emulator
@@ -2858,7 +2860,7 @@ static void gfx_add_vertex(float x, float y, float u, float v, uint8_t color_cod
 }
 
 static void gfx_add_tile_vertices(uint32_t tx, uint32_t ty, uint8_t tile_code, uint8_t color_code) {
-    assert((tx >= 0) && (tx < DISPLAY_TILES_X) && (ty >= 0) && (ty < DISPLAY_TILES_Y));
+    assert((tx < DISPLAY_TILES_X) && (ty < DISPLAY_TILES_Y));
     const float dx = 1.0f / DISPLAY_TILES_X;
     const float dy = 1.0f / DISPLAY_TILES_Y;
     const float du = (float)TILE_WIDTH / TILE_TEXTURE_WIDTH;

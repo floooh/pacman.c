@@ -674,7 +674,6 @@ static void input(const sapp_event*);
 static void start(trigger_t* t);
 static bool now(trigger_t t);
 
-static void pacman_tick(void);
 static void intro_tick(void);
 static void game_tick(void);
 
@@ -703,6 +702,7 @@ static const uint8_t rom_wavetable[256];
 
 /*== APPLICATION ENTRY AND CALLBACKS =========================================*/
 sapp_desc sokol_main(int argc, char* argv[]) {
+    (void)argc; (void)argv;
     return (sapp_desc) {
         .init_cb = init,
         .frame_cb = frame,
@@ -1339,12 +1339,8 @@ static int2_t move(int2_t pos, dir_t dir, bool allow_cornering) {
     return pos;
 }
 
-// disable and reset all debug markers
-static void dbg_clear(void) {
-    memset(&state.gfx.debug_marker, 0, sizeof(state.gfx.debug_marker));
-}
-
 // set a debug marker
+#if DBG_MARKERS
 static void dbg_marker(int index, int2_t tile_pos, uint8_t tile_code, uint8_t color_code) {
     assert((index >= 0) && (index < NUM_DEBUG_MARKERS));
     state.gfx.debug_marker[index] = (debugmarker_t) {
@@ -1354,6 +1350,7 @@ static void dbg_marker(int index, int2_t tile_pos, uint8_t tile_code, uint8_t co
         .tile_pos = clamped_tile_pos(tile_pos)
     };
 }
+#endif
 
 /*== GAMEPLAY CODE ===========================================================*/
 

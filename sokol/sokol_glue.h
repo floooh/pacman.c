@@ -42,12 +42,23 @@
     PROVIDED FUNCTIONS
     ==================
 
-    - if sokol_app.h and sokol_gfx.h is included:
+    sg_environment sglue_environment(void)
 
-        sg_context_desc sapp_sgcontext(void):
+        Returns an sg_environment struct initialized by calling sokol_app.h
+        functions. Use this in the sg_setup() call like this:
 
-            Returns an initialized sg_context_desc function initialized
-            by calling sokol_app.h functions.
+        sg_setup(&(sg_desc){
+            .environment = sglue_enviornment(),
+            ...
+        });
+
+    sg_swapchain sglue_swapchain(void)
+
+        Returns an sg_swapchain struct initialized by calling sokol_app.h
+        functions. Use this in sg_begin_pass() for a 'swapchain pass' like
+        this:
+
+        sg_begin_pass(&(sg_pass){ .swapchain = sglue_swapchain(), ... });
 
     LICENSE
     =======
@@ -93,9 +104,8 @@
 extern "C" {
 #endif
 
-#if defined(SOKOL_GFX_INCLUDED) && defined(SOKOL_APP_INCLUDED)
-SOKOL_GLUE_API_DECL sg_context_desc sapp_sgcontext(void);
-#endif
+SOKOL_GLUE_API_DECL sg_environment sglue_environment(void);
+SOKOL_GLUE_API_DECL sg_swapchain sglue_swapchain(void);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -111,26 +121,38 @@ SOKOL_GLUE_API_DECL sg_context_desc sapp_sgcontext(void);
     #define SOKOL_API_IMPL
 #endif
 
-#if defined(SOKOL_GFX_INCLUDED) && defined(SOKOL_APP_INCLUDED)
-SOKOL_API_IMPL sg_context_desc sapp_sgcontext(void) {
-    sg_context_desc desc;
-    memset(&desc, 0, sizeof(desc));
-    desc.color_format = (sg_pixel_format) sapp_color_format();
-    desc.depth_format = (sg_pixel_format) sapp_depth_format();
-    desc.sample_count = sapp_sample_count();
-    desc.metal.device = sapp_metal_get_device();
-    desc.metal.renderpass_descriptor_cb = sapp_metal_get_renderpass_descriptor;
-    desc.metal.drawable_cb = sapp_metal_get_drawable;
-    desc.d3d11.device = sapp_d3d11_get_device();
-    desc.d3d11.device_context = sapp_d3d11_get_device_context();
-    desc.d3d11.render_target_view_cb = sapp_d3d11_get_render_target_view;
-    desc.d3d11.depth_stencil_view_cb = sapp_d3d11_get_depth_stencil_view;
-    desc.wgpu.device = sapp_wgpu_get_device();
-    desc.wgpu.render_view_cb = sapp_wgpu_get_render_view;
-    desc.wgpu.resolve_view_cb = sapp_wgpu_get_resolve_view;
-    desc.wgpu.depth_stencil_view_cb = sapp_wgpu_get_depth_stencil_view;
-    return desc;
+SOKOL_API_IMPL sg_environment sglue_environment(void) {
+    sg_environment env;
+    memset(&env, 0, sizeof(env));
+    env.defaults.color_format = (sg_pixel_format) sapp_color_format();
+    env.defaults.depth_format = (sg_pixel_format) sapp_depth_format();
+    env.defaults.sample_count = sapp_sample_count();
+    env.metal.device = sapp_metal_get_device();
+    env.d3d11.device = sapp_d3d11_get_device();
+    env.d3d11.device_context = sapp_d3d11_get_device_context();
+    env.wgpu.device = sapp_wgpu_get_device();
+    return env;
 }
-#endif
+
+SOKOL_API_IMPL sg_swapchain sglue_swapchain(void) {
+    sg_swapchain swapchain;
+    memset(&swapchain, 0, sizeof(swapchain));
+    swapchain.width = sapp_width();
+    swapchain.height = sapp_height();
+    swapchain.sample_count = sapp_sample_count();
+    swapchain.color_format = (sg_pixel_format)sapp_color_format();
+    swapchain.depth_format = (sg_pixel_format)sapp_depth_format();
+    swapchain.metal.current_drawable = sapp_metal_get_current_drawable();
+    swapchain.metal.depth_stencil_texture = sapp_metal_get_depth_stencil_texture();
+    swapchain.metal.msaa_color_texture = sapp_metal_get_msaa_color_texture();
+    swapchain.d3d11.render_view = sapp_d3d11_get_render_view();
+    swapchain.d3d11.resolve_view = sapp_d3d11_get_resolve_view();
+    swapchain.d3d11.depth_stencil_view = sapp_d3d11_get_depth_stencil_view();
+    swapchain.wgpu.render_view = sapp_wgpu_get_render_view();
+    swapchain.wgpu.resolve_view = sapp_wgpu_get_resolve_view();
+    swapchain.wgpu.depth_stencil_view = sapp_wgpu_get_depth_stencil_view();
+    swapchain.gl.framebuffer = sapp_gl_get_framebuffer();
+    return swapchain;
+}
 
 #endif /* SOKOL_GLUE_IMPL */

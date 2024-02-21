@@ -509,7 +509,7 @@ static struct {
             sg_image render_target;
             sg_sampler sampler;
             sg_pipeline pip;
-            sg_pass pass;
+            sg_attachments attachments;
         } offscreen;
         struct {
             sg_buffer quad_vbuf;
@@ -2689,8 +2689,8 @@ static void gfx_create_resources(void) {
     });
 
     // pass object for rendering into the offscreen render target
-    state.gfx.offscreen.pass = sg_make_pass(&(sg_pass_desc){
-        .color_attachments[0].image = state.gfx.offscreen.render_target
+    state.gfx.offscreen.attachments = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0].image = state.gfx.offscreen.render_target
     });
 
     // create the 'tile-ROM-texture'
@@ -2832,8 +2832,8 @@ static void gfx_init(void) {
         .image_pool_size = 3,
         .shader_pool_size = 2,
         .pipeline_pool_size = 2,
-        .pass_pool_size = 1,
-        .context = sapp_sgcontext(),
+        .attachments_pool_size = 1,
+        .environment = sglue_environment(),
         .logger.func = slog_func,
     });
     disable(&state.gfx.fadein);
@@ -3022,7 +3022,7 @@ static void gfx_draw(void) {
     sg_update_buffer(state.gfx.offscreen.vbuf, &(sg_range){ .ptr=state.gfx.vertices, .size=state.gfx.num_vertices * sizeof(vertex_t) });
 
     // render tiles and sprites into offscreen render target
-    sg_begin_pass(state.gfx.offscreen.pass, &state.gfx.pass_action);
+    sg_begin_pass(&(sg_pass){ .action = state.gfx.pass_action, .attachments = state.gfx.offscreen.attachments });
     sg_apply_pipeline(state.gfx.offscreen.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.offscreen.vbuf,
@@ -3041,7 +3041,7 @@ static void gfx_draw(void) {
     // upscale-render the offscreen render target into the display framebuffer
     const int canvas_width = sapp_width();
     const int canvas_height = sapp_height();
-    sg_begin_default_pass(&state.gfx.pass_action, canvas_width, canvas_height);
+    sg_begin_pass(&(sg_pass){ .action = state.gfx.pass_action, .swapchain = sglue_swapchain() });
     gfx_adjust_viewport(canvas_width, canvas_height);
     sg_apply_pipeline(state.gfx.display.pip);
     sg_apply_bindings(&(sg_bindings){

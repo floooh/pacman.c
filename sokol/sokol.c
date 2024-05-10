@@ -5,10 +5,10 @@
 #define SOKOL_GLES3
 #elif defined(__APPLE__)
 // NOTE: on macOS, sokol.c is compiled explicitly as ObjC
-//#define SOKOL_GLCORE33
+//#define SOKOL_GLCORE
 #define SOKOL_METAL
 #else
-#define SOKOL_GLCORE33
+#define SOKOL_GLCORE
 #endif
 #include "sokol_app.h"
 #include "sokol_gfx.h"

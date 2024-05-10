@@ -2527,9 +2527,9 @@ static void gfx_create_resources(void) {
                 "  return tex.Sample(smp, uv);\n"
                 "}\n";
             break;
-        case SG_BACKEND_GLCORE33:
+        case SG_BACKEND_GLCORE:
             offscreen_vs_src =
-                "#version 330\n"
+                "#version 410\n"
                 "layout(location=0) in vec4 pos;\n"
                 "layout(location=1) in vec2 uv_in;\n"
                 "layout(location=2) in vec4 data_in;\n"
@@ -2541,7 +2541,7 @@ static void gfx_create_resources(void) {
                 "  data = data_in;\n"
                 "}\n";
             offscreen_fs_src =
-                "#version 330\n"
+                "#version 410\n"
                 "uniform sampler2D tile_tex;\n"
                 "uniform sampler2D pal_tex;\n"
                 "in vec2 uv;\n"
@@ -2554,7 +2554,7 @@ static void gfx_create_resources(void) {
                 "  frag_color = texture(pal_tex, pal_uv) * vec4(1, 1, 1, data.y);\n"
                 "}\n";
             display_vs_src =
-                "#version 330\n"
+                "#version 410\n"
                 "layout(location=0) in vec4 pos;\n"
                 "out vec2 uv;\n"
                 "void main() {\n"
@@ -2562,7 +2562,7 @@ static void gfx_create_resources(void) {
                 "  uv = pos.xy;\n"
                 "}\n";
             display_fs_src =
-                "#version 330\n"
+                "#version 410\n"
                 "uniform sampler2D tex;\n"
                 "in vec2 uv;\n"
                 "out vec4 frag_color;\n"

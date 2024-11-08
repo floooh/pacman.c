@@ -2617,26 +2617,50 @@ static void gfx_create_resources(void) {
     state.gfx.offscreen.pip = sg_make_pipeline(&(sg_pipeline_desc){
         .shader = sg_make_shader(&(sg_shader_desc){
            .attrs = {
-                [0] = { .name="pos", .sem_name="POSITION" },
-                [1] = { .name="uv_in", .sem_name="TEXCOORD", .sem_index=0 },
-                [2] = { .name="data_in", .sem_name="TEXCOORD", .sem_index=1 },
+                [0] = { .glsl_name="pos", .hlsl_sem_name="POSITION" },
+                [1] = { .glsl_name="uv_in", .hlsl_sem_name="TEXCOORD", .hlsl_sem_index=0 },
+                [2] = { .glsl_name="data_in", .hlsl_sem_name="TEXCOORD", .hlsl_sem_index=1 },
             },
-            .vs.source = offscreen_vs_src,
-            .fs = {
-                .images = {
-                    [0] = { .used = true },
-                    [1] = { .used = true },
+            .vertex_func.source = offscreen_vs_src,
+            .fragment_func.source = offscreen_fs_src,
+            .images = {
+                [0] = {
+                    .stage = SG_SHADERSTAGE_FRAGMENT,
+                    .hlsl_register_t_n = 0,
+                    .msl_texture_n = 0,
                 },
-                .samplers = {
-                    [0] = { .used = true },
-                    [1] = { .used = true },
+                [1] = {
+                    .stage = SG_SHADERSTAGE_FRAGMENT,
+                    .hlsl_register_t_n = 1,
+                    .msl_texture_n = 1,
                 },
-                .image_sampler_pairs = {
-                    [0] = { .used = true, .image_slot = 0, .sampler_slot = 0, .glsl_name = "tile_tex" },
-                    [1] = { .used = true, .image_slot = 1, .sampler_slot = 1, .glsl_name = "pal_tex" },
+            },
+            .samplers = {
+                [0] = {
+                    .stage = SG_SHADERSTAGE_FRAGMENT,
+                    .hlsl_register_s_n = 0,
+                    .msl_sampler_n = 0,
                 },
-                .source = offscreen_fs_src
-            }
+                [1] = {
+                    .stage = SG_SHADERSTAGE_FRAGMENT,
+                    .hlsl_register_s_n = 1,
+                    .msl_sampler_n = 1,
+                },
+            },
+            .image_sampler_pairs = {
+                [0] = {
+                    .stage = SG_SHADERSTAGE_FRAGMENT,
+                    .image_slot = 0,
+                    .sampler_slot = 0,
+                    .glsl_name = "tile_tex"
+                },
+                [1] = {
+                    .stage = SG_SHADERSTAGE_FRAGMENT,
+                    .image_slot = 1,
+                    .sampler_slot = 1,
+                    .glsl_name = "pal_tex"
+                },
+            },
         }),
         .layout = {
             .attrs = {
@@ -2659,14 +2683,25 @@ static void gfx_create_resources(void) {
     // create pipeline and shader for rendering into display
     state.gfx.display.pip = sg_make_pipeline(&(sg_pipeline_desc){
         .shader = sg_make_shader(&(sg_shader_desc){
-            .attrs[0] = { .name="pos", .sem_name="POSITION" },
-            .vs.source = display_vs_src,
-            .fs = {
-                .images[0].used = true,
-                .samplers[0].used = true,
-                .image_sampler_pairs[0] = { .used = true, .image_slot = 0, .sampler_slot = 0, .glsl_name = "tex" },
-                .source = display_fs_src
-            }
+            .attrs[0] = { .glsl_name="pos", .hlsl_sem_name="POSITION" },
+            .vertex_func.source = display_vs_src,
+            .fragment_func.source = display_fs_src,
+            .images[0] = {
+                .stage = SG_SHADERSTAGE_FRAGMENT,
+                .hlsl_register_t_n = 0,
+                .msl_texture_n = 0,
+            },
+            .samplers[0] = {
+                .stage = SG_SHADERSTAGE_FRAGMENT,
+                .hlsl_register_s_n = 0,
+                .msl_sampler_n = 0,
+            },
+            .image_sampler_pairs[0] = {
+                .stage = SG_SHADERSTAGE_FRAGMENT,
+                .image_slot = 0,
+                .sampler_slot = 0,
+                .glsl_name = "tex"
+            },
         }),
         .layout.attrs[0].format = SG_VERTEXFORMAT_FLOAT2,
         .primitive_type = SG_PRIMITIVETYPE_TRIANGLE_STRIP
@@ -3026,14 +3061,14 @@ static void gfx_draw(void) {
     sg_apply_pipeline(state.gfx.offscreen.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.offscreen.vbuf,
-        .fs = {
-            .images = {
-                [0] = state.gfx.offscreen.tile_img,
-                [1] = state.gfx.offscreen.palette_img,
-            },
-            .samplers[0] = state.gfx.offscreen.sampler,
-            .samplers[1] = state.gfx.offscreen.sampler,
-        }
+        .images = {
+            [0] = state.gfx.offscreen.tile_img,
+            [1] = state.gfx.offscreen.palette_img,
+        },
+        .samplers = {
+            [0] = state.gfx.offscreen.sampler,
+            [1] = state.gfx.offscreen.sampler,
+        },
     });
     sg_draw(0, state.gfx.num_vertices, 1);
     sg_end_pass();
@@ -3046,10 +3081,8 @@ static void gfx_draw(void) {
     sg_apply_pipeline(state.gfx.display.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.display.quad_vbuf,
-        .fs = {
-            .images[0] = state.gfx.offscreen.render_target,
-            .samplers[0] = state.gfx.display.sampler,
-        }
+        .images[0] = state.gfx.offscreen.render_target,
+        .samplers[0] = state.gfx.display.sampler,
     });
     sg_draw(0, 4, 1);
     sg_end_pass();

@@ -37,6 +37,8 @@ target_include_directories(sokol INTERFACE sokol)
 #=== EXECUTABLE: pacman
 if(CMAKE_SYSTEM_NAME STREQUAL Windows)
     add_executable(pacman WIN32 pacman.c)
+elseif(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    add_executable(pacman MACOSX_BUNDLE pacman.c)
 else()
     add_executable(pacman pacman.c)
 endif()

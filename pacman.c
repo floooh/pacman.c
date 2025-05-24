@@ -2392,8 +2392,10 @@ static void gfx_create_resources(void) {
 
     // create a dynamic vertex buffer for the tile and sprite quads
     state.gfx.offscreen.vbuf = sg_make_buffer(&(sg_buffer_desc){
-        .type = SG_BUFFERTYPE_VERTEXBUFFER,
-        .usage = SG_USAGE_STREAM,
+        .usage = {
+            .vertex_buffer = true,
+            .stream_update = true,
+        },
         .size = sizeof(state.gfx.vertices),
     });
 
@@ -2709,7 +2711,7 @@ static void gfx_create_resources(void) {
 
     // create a render target image with a fixed upscale ratio
     state.gfx.offscreen.render_target = sg_make_image(&(sg_image_desc){
-        .render_target = true,
+        .usage.render_attachment = true,
         .width = DISPLAY_PIXELS_X * 2,
         .height = DISPLAY_PIXELS_Y * 2,
         .pixel_format = SG_PIXELFORMAT_RGBA8,

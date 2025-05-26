@@ -713,6 +713,7 @@ sapp_desc sokol_main(int argc, char* argv[]) {
         .width = DISPLAY_TILES_X * TILE_WIDTH * 2,
         .height = DISPLAY_TILES_Y * TILE_HEIGHT * 2,
         .window_title = "pacman.c",
+        .icon.sokol_default = true,
         .logger.func = slog_func,
     };
 }

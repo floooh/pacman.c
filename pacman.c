@@ -505,8 +505,11 @@ static struct {
         struct {
             sg_buffer vbuf;
             sg_image tile_img;
+            sg_view tile_texview;
             sg_image palette_img;
-            sg_image render_target;
+            sg_view palette_texview;
+            sg_image render_target_img;
+            sg_view render_target_texview;
             sg_sampler sampler;
             sg_pipeline pip;
             sg_attachments attachments;
@@ -2626,13 +2629,13 @@ static void gfx_create_resources(void) {
             },
             .vertex_func.source = offscreen_vs_src,
             .fragment_func.source = offscreen_fs_src,
-            .images = {
-                [0] = {
+            .views = {
+                [0].texture = {
                     .stage = SG_SHADERSTAGE_FRAGMENT,
                     .hlsl_register_t_n = 0,
                     .msl_texture_n = 0,
                 },
-                [1] = {
+                [1].texture = {
                     .stage = SG_SHADERSTAGE_FRAGMENT,
                     .hlsl_register_t_n = 1,
                     .msl_texture_n = 1,
@@ -2650,16 +2653,16 @@ static void gfx_create_resources(void) {
                     .msl_sampler_n = 1,
                 },
             },
-            .image_sampler_pairs = {
+            .texture_sampler_pairs = {
                 [0] = {
                     .stage = SG_SHADERSTAGE_FRAGMENT,
-                    .image_slot = 0,
+                    .view_slot = 0,
                     .sampler_slot = 0,
                     .glsl_name = "tile_tex"
                 },
                 [1] = {
                     .stage = SG_SHADERSTAGE_FRAGMENT,
-                    .image_slot = 1,
+                    .view_slot = 1,
                     .sampler_slot = 1,
                     .glsl_name = "pal_tex"
                 },
@@ -2689,7 +2692,7 @@ static void gfx_create_resources(void) {
             .attrs[0] = { .glsl_name="pos", .hlsl_sem_name="POSITION" },
             .vertex_func.source = display_vs_src,
             .fragment_func.source = display_fs_src,
-            .images[0] = {
+            .views[0].texture = {
                 .stage = SG_SHADERSTAGE_FRAGMENT,
                 .hlsl_register_t_n = 0,
                 .msl_texture_n = 0,
@@ -2699,9 +2702,9 @@ static void gfx_create_resources(void) {
                 .hlsl_register_s_n = 0,
                 .msl_sampler_n = 0,
             },
-            .image_sampler_pairs[0] = {
+            .texture_sampler_pairs[0] = {
                 .stage = SG_SHADERSTAGE_FRAGMENT,
-                .image_slot = 0,
+                .view_slot = 0,
                 .sampler_slot = 0,
                 .glsl_name = "tex"
             },
@@ -2711,8 +2714,8 @@ static void gfx_create_resources(void) {
     });
 
     // create a render target image with a fixed upscale ratio
-    state.gfx.offscreen.render_target = sg_make_image(&(sg_image_desc){
-        .usage.render_attachment = true,
+    state.gfx.offscreen.render_target_img = sg_make_image(&(sg_image_desc){
+        .usage.color_attachment = true,
         .width = DISPLAY_PIXELS_X * 2,
         .height = DISPLAY_PIXELS_Y * 2,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
@@ -2726,25 +2729,36 @@ static void gfx_create_resources(void) {
         .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
     });
 
-    // pass object for rendering into the offscreen render target
-    state.gfx.offscreen.attachments = sg_make_attachments(&(sg_attachments_desc){
-        .colors[0].image = state.gfx.offscreen.render_target
+    // a texture view to sample the render target image as texture
+    state.gfx.offscreen.render_target_texview = sg_make_view(&(sg_view_desc){
+        .texture.image = state.gfx.offscreen.render_target_img,
     });
 
-    // create the 'tile-ROM-texture'
+    // pass object for rendering into the offscreen render target
+    state.gfx.offscreen.attachments.colors[0] = sg_make_view(&(sg_view_desc){
+        .color_attachment.image = state.gfx.offscreen.render_target_img,
+    });
+
+    // create the 'tile-ROM-texture' and a texture view
     state.gfx.offscreen.tile_img = sg_make_image(&(sg_image_desc){
         .width  = TILE_TEXTURE_WIDTH,
         .height = TILE_TEXTURE_HEIGHT,
         .pixel_format = SG_PIXELFORMAT_R8,
         .data.subimage[0][0] = SG_RANGE(state.gfx.tile_pixels)
     });
+    state.gfx.offscreen.tile_texview = sg_make_view(&(sg_view_desc){
+        .texture.image = state.gfx.offscreen.tile_img,
+    });
 
-    // create the palette texture
+    // create the palette texture and a texture view
     state.gfx.offscreen.palette_img = sg_make_image(&(sg_image_desc){
         .width = 256,
         .height = 1,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
         .data.subimage[0][0] = SG_RANGE(state.gfx.color_palette)
+    });
+    state.gfx.offscreen.palette_texview = sg_make_view(&(sg_view_desc){
+        .texture.image = state.gfx.offscreen.palette_img,
     });
 
     // create a sampler with nearest filtering for the offscreen pass
@@ -2870,7 +2884,7 @@ static void gfx_init(void) {
         .image_pool_size = 3,
         .shader_pool_size = 2,
         .pipeline_pool_size = 2,
-        .attachments_pool_size = 1,
+        .view_pool_size = 8,
         .environment = sglue_environment(),
         .logger.func = slog_func,
     });
@@ -3064,9 +3078,9 @@ static void gfx_draw(void) {
     sg_apply_pipeline(state.gfx.offscreen.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.offscreen.vbuf,
-        .images = {
-            [0] = state.gfx.offscreen.tile_img,
-            [1] = state.gfx.offscreen.palette_img,
+        .views = {
+            [0] = state.gfx.offscreen.tile_texview,
+            [1] = state.gfx.offscreen.palette_texview,
         },
         .samplers = {
             [0] = state.gfx.offscreen.sampler,
@@ -3084,7 +3098,7 @@ static void gfx_draw(void) {
     sg_apply_pipeline(state.gfx.display.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.display.quad_vbuf,
-        .images[0] = state.gfx.offscreen.render_target,
+        .views[0] = state.gfx.offscreen.render_target_texview,
         .samplers[0] = state.gfx.display.sampler,
     });
     sg_draw(0, 4, 1);

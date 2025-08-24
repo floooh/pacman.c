@@ -501,7 +501,6 @@ static struct {
         debugmarker_t debug_marker[NUM_DEBUG_MARKERS];
 
         // sokol-gfx resources
-        sg_pass_action pass_action;
         struct {
             sg_image img;
             sg_view tex_view;
@@ -513,15 +512,16 @@ static struct {
         struct {
             sg_image img;
             sg_view tex_view;
-            sg_view att_view;
         } render;
         sg_sampler linear_smp;
         sg_sampler nearest_smp;
         struct {
+            sg_pass pass;
             sg_buffer vbuf;
             sg_pipeline pip;
         } offscreen;
         struct {
+            sg_pass_action pass_action;
             sg_buffer quad_vbuf;
             sg_pipeline pip;
         } display;
@@ -2396,9 +2396,13 @@ static void intro_tick(void) {
 /* create all sokol-gfx resources */
 static void gfx_create_resources(void) {
     // pass action for clearing the background to black
-    state.gfx.pass_action = (sg_pass_action) {
-        .colors[0] = { .load_action = SG_LOADACTION_CLEAR, .clear_value = { 0.0f, 0.0f, 0.0f, 1.0f } }
+    state.gfx.offscreen.pass.action = (sg_pass_action) {
+        .colors[0] = {
+            .load_action = SG_LOADACTION_CLEAR,
+            .clear_value = { 0.0f, 0.0f, 0.0f, 1.0f }
+        },
     };
+    state.gfx.display.pass_action = state.gfx.offscreen.pass.action;
 
     // create a dynamic vertex buffer for the tile and sprite quads
     state.gfx.offscreen.vbuf = sg_make_buffer(&(sg_buffer_desc){
@@ -2729,7 +2733,7 @@ static void gfx_create_resources(void) {
     state.gfx.render.tex_view = sg_make_view(&(sg_view_desc){
         .texture.image = state.gfx.render.img,
     });
-    state.gfx.render.att_view = sg_make_view(&(sg_view_desc){
+    state.gfx.offscreen.pass.attachments.colors[0] = sg_make_view(&(sg_view_desc){
         .color_attachment.image = state.gfx.render.img,
     });
 
@@ -3076,10 +3080,7 @@ static void gfx_draw(void) {
     sg_update_buffer(state.gfx.offscreen.vbuf, &(sg_range){ .ptr=state.gfx.vertices, .size=state.gfx.num_vertices * sizeof(vertex_t) });
 
     // render tiles and sprites into offscreen render target
-    sg_begin_pass(&(sg_pass){
-        .action = state.gfx.pass_action,
-        .attachments.colors[0] = state.gfx.render.att_view,
-    });
+    sg_begin_pass(&state.gfx.offscreen.pass);
     sg_apply_pipeline(state.gfx.offscreen.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.offscreen.vbuf,
@@ -3098,7 +3099,10 @@ static void gfx_draw(void) {
     // upscale-render the offscreen render target into the display framebuffer
     const int canvas_width = sapp_width();
     const int canvas_height = sapp_height();
-    sg_begin_pass(&(sg_pass){ .action = state.gfx.pass_action, .swapchain = sglue_swapchain() });
+    sg_begin_pass(&(sg_pass){
+        .action = state.gfx.display.pass_action,
+        .swapchain = sglue_swapchain(),
+    });
     gfx_adjust_viewport(canvas_width, canvas_height);
     sg_apply_pipeline(state.gfx.display.pip);
     sg_apply_bindings(&(sg_bindings){

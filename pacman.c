@@ -503,21 +503,27 @@ static struct {
         // sokol-gfx resources
         sg_pass_action pass_action;
         struct {
+            sg_image img;
+            sg_view tex_view;
+        } tilerom;
+        struct {
+            sg_image img;
+            sg_view tex_view;
+        } palette;
+        struct {
+            sg_image img;
+            sg_view tex_view;
+            sg_view att_view;
+        } render;
+        sg_sampler linear_smp;
+        sg_sampler nearest_smp;
+        struct {
             sg_buffer vbuf;
-            sg_image tile_img;
-            sg_view tile_texview;
-            sg_image palette_img;
-            sg_view palette_texview;
-            sg_image render_target_img;
-            sg_view render_target_texview;
-            sg_sampler sampler;
             sg_pipeline pip;
-            sg_attachments attachments;
         } offscreen;
         struct {
             sg_buffer quad_vbuf;
             sg_pipeline pip;
-            sg_sampler sampler;
         } display;
 
         // intermediate vertex buffer for tile- and sprite-rendering
@@ -2713,56 +2719,52 @@ static void gfx_create_resources(void) {
         .primitive_type = SG_PRIMITIVETYPE_TRIANGLE_STRIP
     });
 
-    // create a render target image with a fixed upscale ratio
-    state.gfx.offscreen.render_target_img = sg_make_image(&(sg_image_desc){
+    // create the image, texture- and color-attachment view for the rendered result
+    state.gfx.render.img = sg_make_image(&(sg_image_desc){
         .usage.color_attachment = true,
         .width = DISPLAY_PIXELS_X * 2,
         .height = DISPLAY_PIXELS_Y * 2,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
     });
+    state.gfx.render.tex_view = sg_make_view(&(sg_view_desc){
+        .texture.image = state.gfx.render.img,
+    });
+    state.gfx.render.att_view = sg_make_view(&(sg_view_desc){
+        .color_attachment.image = state.gfx.render.img,
+    });
+
+    // create image and texture-view for the tile-rom
+    state.gfx.tilerom.img = sg_make_image(&(sg_image_desc){
+        .width  = TILE_TEXTURE_WIDTH,
+        .height = TILE_TEXTURE_HEIGHT,
+        .pixel_format = SG_PIXELFORMAT_R8,
+        .data.subimage[0][0] = SG_RANGE(state.gfx.tile_pixels)
+    });
+    state.gfx.tilerom.tex_view = sg_make_view(&(sg_view_desc){
+        .texture.image = state.gfx.tilerom.img,
+    });
+
+    // create image and texture-view for the color palette
+    state.gfx.palette.img = sg_make_image(&(sg_image_desc){
+        .width = 256,
+        .height = 1,
+        .pixel_format = SG_PIXELFORMAT_RGBA8,
+        .data.subimage[0][0] = SG_RANGE(state.gfx.color_palette)
+    });
+    state.gfx.palette.tex_view = sg_make_view(&(sg_view_desc){
+        .texture.image = state.gfx.palette.img,
+    });
 
     // create an sampler to render the offscreen render target with linear upscale filtering
-    state.gfx.display.sampler = sg_make_sampler(&(sg_sampler_desc){
+    state.gfx.linear_smp = sg_make_sampler(&(sg_sampler_desc){
         .min_filter = SG_FILTER_LINEAR,
         .mag_filter = SG_FILTER_LINEAR,
         .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
         .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
     });
 
-    // a texture view to sample the render target image as texture
-    state.gfx.offscreen.render_target_texview = sg_make_view(&(sg_view_desc){
-        .texture.image = state.gfx.offscreen.render_target_img,
-    });
-
-    // pass object for rendering into the offscreen render target
-    state.gfx.offscreen.attachments.colors[0] = sg_make_view(&(sg_view_desc){
-        .color_attachment.image = state.gfx.offscreen.render_target_img,
-    });
-
-    // create the 'tile-ROM-texture' and a texture view
-    state.gfx.offscreen.tile_img = sg_make_image(&(sg_image_desc){
-        .width  = TILE_TEXTURE_WIDTH,
-        .height = TILE_TEXTURE_HEIGHT,
-        .pixel_format = SG_PIXELFORMAT_R8,
-        .data.subimage[0][0] = SG_RANGE(state.gfx.tile_pixels)
-    });
-    state.gfx.offscreen.tile_texview = sg_make_view(&(sg_view_desc){
-        .texture.image = state.gfx.offscreen.tile_img,
-    });
-
-    // create the palette texture and a texture view
-    state.gfx.offscreen.palette_img = sg_make_image(&(sg_image_desc){
-        .width = 256,
-        .height = 1,
-        .pixel_format = SG_PIXELFORMAT_RGBA8,
-        .data.subimage[0][0] = SG_RANGE(state.gfx.color_palette)
-    });
-    state.gfx.offscreen.palette_texview = sg_make_view(&(sg_view_desc){
-        .texture.image = state.gfx.offscreen.palette_img,
-    });
-
     // create a sampler with nearest filtering for the offscreen pass
-    state.gfx.offscreen.sampler = sg_make_sampler(&(sg_sampler_desc){
+    state.gfx.nearest_smp = sg_make_sampler(&(sg_sampler_desc){
         .min_filter = SG_FILTER_NEAREST,
         .mag_filter = SG_FILTER_NEAREST,
         .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
@@ -3074,17 +3076,20 @@ static void gfx_draw(void) {
     sg_update_buffer(state.gfx.offscreen.vbuf, &(sg_range){ .ptr=state.gfx.vertices, .size=state.gfx.num_vertices * sizeof(vertex_t) });
 
     // render tiles and sprites into offscreen render target
-    sg_begin_pass(&(sg_pass){ .action = state.gfx.pass_action, .attachments = state.gfx.offscreen.attachments });
+    sg_begin_pass(&(sg_pass){
+        .action = state.gfx.pass_action,
+        .attachments.colors[0] = state.gfx.render.att_view,
+    });
     sg_apply_pipeline(state.gfx.offscreen.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.offscreen.vbuf,
         .views = {
-            [0] = state.gfx.offscreen.tile_texview,
-            [1] = state.gfx.offscreen.palette_texview,
+            [0] = state.gfx.tilerom.tex_view,
+            [1] = state.gfx.palette.tex_view,
         },
         .samplers = {
-            [0] = state.gfx.offscreen.sampler,
-            [1] = state.gfx.offscreen.sampler,
+            [0] = state.gfx.nearest_smp,
+            [1] = state.gfx.nearest_smp,
         },
     });
     sg_draw(0, state.gfx.num_vertices, 1);
@@ -3098,8 +3103,8 @@ static void gfx_draw(void) {
     sg_apply_pipeline(state.gfx.display.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.gfx.display.quad_vbuf,
-        .views[0] = state.gfx.offscreen.render_target_texview,
-        .samplers[0] = state.gfx.display.sampler,
+        .views[0] = state.gfx.render.tex_view,
+        .samplers[0] = state.gfx.linear_smp,
     });
     sg_draw(0, 4, 1);
     sg_end_pass();

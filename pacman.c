@@ -2742,7 +2742,7 @@ static void gfx_create_resources(void) {
         .width  = TILE_TEXTURE_WIDTH,
         .height = TILE_TEXTURE_HEIGHT,
         .pixel_format = SG_PIXELFORMAT_R8,
-        .data.subimage[0][0] = SG_RANGE(state.gfx.tile_pixels)
+        .data.mip_levels[0] = SG_RANGE(state.gfx.tile_pixels)
     });
     state.gfx.tilerom.tex_view = sg_make_view(&(sg_view_desc){
         .texture.image = state.gfx.tilerom.img,
@@ -2753,7 +2753,7 @@ static void gfx_create_resources(void) {
         .width = 256,
         .height = 1,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
-        .data.subimage[0][0] = SG_RANGE(state.gfx.color_palette)
+        .data.mip_levels[0] = SG_RANGE(state.gfx.color_palette)
     });
     state.gfx.palette.tex_view = sg_make_view(&(sg_view_desc){
         .texture.image = state.gfx.palette.img,

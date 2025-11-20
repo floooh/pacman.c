@@ -798,6 +798,11 @@ static void input(const sapp_event* ev) {
                 case SAPP_KEYCODE_D:
                     state.input.right = state.input.anykey = btn_down;
                     break;
+                case SAPP_KEYCODE_F:
+                    if (btn_down) {
+                        sapp_toggle_fullscreen();
+                    }
+                    break;
                 case SAPP_KEYCODE_ESCAPE:
                     state.input.esc = state.input.anykey = btn_down;
                     break;

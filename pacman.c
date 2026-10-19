@@ -2415,7 +2415,7 @@ static void gfx_create_resources(void) {
     state.gfx.offscreen.vbuf = sg_make_buffer(&(sg_buffer_desc){
         .usage = {
             .vertex_buffer = true,
-            .stream_update = true,
+            .write_transient = true,
         },
         .size = sizeof(state.gfx.vertices),
     });
@@ -3079,7 +3079,11 @@ static void gfx_draw(void) {
         gfx_add_fade_vertices();
     }
     assert(state.gfx.num_vertices <= MAX_VERTICES);
-    sg_update_buffer(state.gfx.offscreen.vbuf, &(sg_range){ .ptr=state.gfx.vertices, .size=state.gfx.num_vertices * sizeof(vertex_t) });
+    sg_write_buffer_transient(&(sg_write_buffer_desc){
+        .dst.buffer = state.gfx.offscreen.vbuf,
+        .src.data = SG_RANGE(state.gfx.vertices),
+        .size = state.gfx.num_vertices * sizeof(vertex_t),
+    });
 
     // render tiles and sprites into offscreen render target
     sg_begin_pass(&state.gfx.offscreen.pass);
